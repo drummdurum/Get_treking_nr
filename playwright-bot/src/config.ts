@@ -22,7 +22,7 @@ export const config = {
     password: require_env('AO_PASSWORD'),
   },
   bot: {
-    cronSchedule:       process.env.CRON_SCHEDULE        ?? '*/30 * * * *',
+    cronSchedule:       process.env.CRON_SCHEDULE        ?? '0 3 * * *',
     maxRetriesPerOrder: parseInt(process.env.MAX_RETRIES_PER_ORDER ?? '10', 10),
     pageTimeoutMs:      parseInt(process.env.PAGE_TIMEOUT_MS       ?? '30000', 10),
     runOnStartup:       process.env.RUN_ON_STARTUP        !== 'false',
