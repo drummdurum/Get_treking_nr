@@ -1,0 +1,164 @@
+{
+  "info": {
+    "name": "Kloakgods Tracking API",
+    "description": "REST endpoints til AO/Ahlsell tracking automation. Brug variablen {{base_url}} til at skifte mellem lokal og produktion.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key",   "value": "X-API-Key",      "type": "string" },
+      { "key": "value", "value": "{{api_key}}",     "type": "string" },
+      { "key": "in",    "value": "header",          "type": "string" }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://kloakgods.dk",
+      "description": "Skift til fx http://localhost:8080 for lokal test"
+    },
+    {
+      "key": "api_key",
+      "value": "K1sfL9tY0HaVkrnMdvZSClN6Q5XbRzOeWhDGj4Pg",
+      "description": "API-nøgle fra WordPress > Indstillinger > Kloakgods Tracking"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. GET orders-missing-tracking",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/wp-json/kloakgods/v1/orders-missing-tracking?max_checks=10",
+          "host": ["{{base_url}}"],
+          "path": ["wp-json", "kloakgods", "v1", "orders-missing-tracking"],
+          "query": [
+            {
+              "key": "max_checks",
+              "value": "10",
+              "description": "Spring ordrer over der allerede er tjekket dette antal gange (default: 10)"
+            }
+          ]
+        },
+        "description": "Returnerer alle WooCommerce-ordrer med en AO-reference men uden tracking, der endnu ikke er tjekket for mange gange.\n\n**Forventet svar (200):**\n```json\n[\n  {\n    \"order_id\": 33735,\n    \"ao_reference\": \"33735\",\n    \"status\": \"processing\",\n    \"date\": \"2026-04-29T10:00:00+00:00\",\n    \"check_count\": 0,\n    \"last_checked\": null\n  }\n]\n```"
+      },
+      "response": [
+        {
+          "name": "200 OK – ordrer fundet",
+          "status": "OK",
+          "code": 200,
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "[\n  {\n    \"order_id\": 33735,\n    \"ao_reference\": \"33735\",\n    \"status\": \"processing\",\n    \"date\": \"2026-04-29T10:00:00+00:00\",\n    \"check_count\": 0,\n    \"last_checked\": null\n  }\n]",
+          "originalRequest": {
+            "method": "GET",
+            "url": "{{base_url}}/wp-json/kloakgods/v1/orders-missing-tracking?max_checks=10"
+          }
+        },
+        {
+          "name": "401 Unauthorized – forkert API-nøgle",
+          "status": "Unauthorized",
+          "code": 401,
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\n  \"code\": \"rest_forbidden\",\n  \"message\": \"Sorry, you are not allowed to do that.\",\n  \"data\": { \"status\": 401 }\n}",
+          "originalRequest": {
+            "method": "GET",
+            "url": "{{base_url}}/wp-json/kloakgods/v1/orders-missing-tracking"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. POST update-tracking",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"order_id\": 33735,\n  \"tracking_number\": \"FW827302\",\n  \"carrier\": \"Danske Fragtmænd\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{base_url}}/wp-json/kloakgods/v1/update-tracking",
+          "host": ["{{base_url}}"],
+          "path": ["wp-json", "kloakgods", "v1", "update-tracking"]
+        },
+        "description": "Gemmer tracking-nummer og carrier på en WooCommerce-ordre. Sletter check-counteren og tilføjer en ordre-note.\n\n**Body-parametre:**\n- `order_id` (integer, påkrævet)\n- `tracking_number` (string, påkrævet) – fx `FW827302`\n- `carrier` (string, påkrævet) – fx `Danske Fragtmænd` eller `GLS`\n\n**Forventet svar (200):**\n```json\n{\n  \"success\": true,\n  \"order_id\": 33735,\n  \"tracking\": {\n    \"tracking_provider\": \"\",\n    \"custom_tracking_provider\": \"Danske Fragtmænd\",\n    \"custom_tracking_link\": \"\",\n    \"tracking_number\": \"FW827302\",\n    \"date_shipped\": \"1714385000\"\n  }\n}\n```"
+      },
+      "response": [
+        {
+          "name": "200 OK – tracking gemt",
+          "status": "OK",
+          "code": 200,
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\n  \"success\": true,\n  \"order_id\": 33735,\n  \"tracking\": {\n    \"tracking_provider\": \"\",\n    \"custom_tracking_provider\": \"Danske Fragtmænd\",\n    \"custom_tracking_link\": \"\",\n    \"tracking_number\": \"FW827302\",\n    \"date_shipped\": \"1714385000\"\n  }\n}",
+          "originalRequest": {
+            "method": "POST",
+            "url": "{{base_url}}/wp-json/kloakgods/v1/update-tracking"
+          }
+        },
+        {
+          "name": "404 Not Found – ordre ikke fundet",
+          "status": "Not Found",
+          "code": 404,
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\n  \"error\": \"Order 99999 not found.\"\n}",
+          "originalRequest": {
+            "method": "POST",
+            "url": "{{base_url}}/wp-json/kloakgods/v1/update-tracking"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. POST mark-checked",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"order_id\": 33735\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{base_url}}/wp-json/kloakgods/v1/mark-checked",
+          "host": ["{{base_url}}"],
+          "path": ["wp-json", "kloakgods", "v1", "mark-checked"]
+        },
+        "description": "Markerer en ordre som 'tjekket' uden at sætte et tracking-nummer. Øger check-counteren. Bruges når AO endnu ikke har et T&T-link klar.\n\n**Forventet svar (200):**\n```json\n{\n  \"success\": true,\n  \"order_id\": 33735,\n  \"check_count\": 1\n}\n```"
+      },
+      "response": [
+        {
+          "name": "200 OK – markeret",
+          "status": "OK",
+          "code": 200,
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\n  \"success\": true,\n  \"order_id\": 33735,\n  \"check_count\": 1\n}",
+          "originalRequest": {
+            "method": "POST",
+            "url": "{{base_url}}/wp-json/kloakgods/v1/mark-checked"
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. GET WP REST heartbeat",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/wp-json",
+          "host": ["{{base_url}}"],
+          "path": ["wp-json"]
+        },
+        "description": "Hurtig ping for at verificere at WordPress og REST API er tilgængeligt. Kræver ingen API-nøgle.\n\nSkal returnere JSON med `name` feltet sat til dit sites navn."
+      },
+      "response": []
+    }
+  ]
+}
