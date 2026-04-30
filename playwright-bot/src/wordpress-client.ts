@@ -16,7 +16,7 @@ const http: AxiosInstance = axios.create({
   timeout: 15_000,
   headers: {
     'Content-Type': 'application/json',
-    'X-API-Key': config.wp.apiKey,
+    'X-KG-API-Key': config.wp.apiKey,
   },
 });
 

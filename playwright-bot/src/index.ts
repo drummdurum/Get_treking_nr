@@ -43,7 +43,6 @@ async function run(): Promise<void> {
   };
 
   logger.info('═══ Bot-kørsel startet ═══');
-
   // ── 1. Hent ordrer der mangler tracking ────────────────────────────────
   let orders;
   try {
@@ -53,11 +52,22 @@ async function run(): Promise<void> {
     return;
   }
 
+
   summary.ordersFound = orders.length;
 
   if (orders.length === 0) {
     logger.info('Ingen ordrer mangler tracking. Kørsel afsluttet.');
     return;
+  }
+
+  // Log hvilke felter der mangler på hver ordre
+  for (const o of orders) {
+    const missing = [];
+    if (!o.ao_reference) missing.push('ao_reference');
+    if (o.check_count === undefined) missing.push('check_count');
+    if (missing.length > 0) {
+      logger.warn(`Ordre #${o.order_id} mangler: ${missing.join(', ')}`);
+    }
   }
 
   logger.info(`${orders.length} ordre(r) mangler tracking. Starter browser…`);
@@ -72,16 +82,17 @@ async function run(): Promise<void> {
     return;
   }
 
-  // ── 3. Behandl kun første ordre ───────────────────────────────────────
-  const order = orders[0];
-  if (order) {
+  // ── 3. Behandl ALLE ordrer ───────────────────────────────────────────
+  for (const order of orders) {
+    // Brug order_id som fallback hvis ao_reference mangler
+    const aoRef = order.ao_reference || String(order.order_id);
     logger.info(
-      `Behandler ordre #${order.order_id} (AO ref: ${order.ao_reference}, ` +
+      `Behandler ordre #${order.order_id} (AO ref: ${aoRef}, ` +
       `tjekket ${order.check_count} gang(e) før)`
     );
 
     try {
-      const result = await getTrackingForOrder(order.ao_reference);
+      const result = await getTrackingForOrder(aoRef);
 
       if (result.success) {
         // Post ALLE forsendelser til WooCommerce (kan være flere fragtbreve på én ordre)
