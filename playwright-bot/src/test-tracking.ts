@@ -12,8 +12,8 @@ dotenv.config();
 
 import { launchAndLogin, getTrackingForOrder, closeBrowser } from './ao-scraper';
 
-const AO_ORDER_REF     = '33754';
-const EXPECTED_TRACKING = 'FW834398';
+const AO_ORDER_REF     = '33772';
+const EXPECTED_TRACKING = '';
 
 async function main() {
   console.log('\n══════════════════════════════════════════');

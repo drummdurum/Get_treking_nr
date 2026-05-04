@@ -57,11 +57,16 @@ export async function launchAndLogin(): Promise<void> {
  * Look up one AO order reference and extract the tracking number.
  */
 export async function getTrackingForOrder(aoReference: string): Promise<ScrapeResult> {
-  if (!context) {
-    return { success: false, reason: 'error', message: 'Browser ikke startet.' };
+  if (!context || !browser?.isConnected()) {
+    return { success: false, reason: 'error', message: 'Browser ikke tilgængelig eller lukket uventet.' };
   }
 
-  const page = await context.newPage();
+  let page;
+  try {
+    page = await context.newPage();
+  } catch {
+    return { success: false, reason: 'error', message: 'Kunne ikke åbne ny side – browser lukket uventet.' };
+  }
   page.setDefaultTimeout(config.bot.pageTimeoutMs);
 
   try {

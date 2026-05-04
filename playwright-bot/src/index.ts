@@ -53,6 +53,12 @@ async function run(): Promise<void> {
   }
 
 
+  // Begræns antal ordrer hvis TEST_ORDER_LIMIT er sat
+  if (config.bot.testOrderLimit && config.bot.testOrderLimit > 0) {
+    orders = orders.slice(0, config.bot.testOrderLimit);
+    logger.info(`TEST_ORDER_LIMIT=${config.bot.testOrderLimit}: behandler kun ${orders.length} ordre(r).`);
+  }
+
   summary.ordersFound = orders.length;
 
   if (orders.length === 0) {
@@ -84,7 +90,7 @@ async function run(): Promise<void> {
 
   // ── 3. Behandl ALLE ordrer ───────────────────────────────────────────
   for (const order of orders) {
-    // Brug order_id som fallback hvis ao_reference mangler
+    // Brug order_id som ao_reference (de er ens i dette system)
     const aoRef = order.ao_reference || String(order.order_id);
     logger.info(
       `Behandler ordre #${order.order_id} (AO ref: ${aoRef}, ` +
@@ -92,7 +98,25 @@ async function run(): Promise<void> {
     );
 
     try {
-      const result = await getTrackingForOrder(aoRef);
+      let result = await getTrackingForOrder(aoRef);
+
+      // Browser crashede – forsøg at genstarte og login igen
+      if (!result.success && result.reason === 'error' && result.message?.includes('browser')) {
+        logger.warn('Browser lukket uventet – forsøger at genstarte…');
+        try {
+          await launchAndLogin();
+          result = await getTrackingForOrder(aoRef);
+        } catch (restartErr) {
+          logger.error('Kunne ikke genstarte browser:', restartErr);
+          summary.errors += orders.slice(orders.indexOf(order)).length;
+          break;
+        }
+        if (!result.success && result.reason === 'error') {
+          logger.error(`Ordre #${order.order_id} fejlede også efter browser-genstart: ${result.message}`);
+          summary.errors++;
+          continue;
+        }
+      }
 
       if (result.success) {
         // Post ALLE forsendelser til WooCommerce (kan være flere fragtbreve på én ordre)
@@ -189,12 +213,15 @@ if (runOnce) {
     run().catch((err) => logger.error('Fejl ved opstartsrun:', err));
   }
 
-  // ── Planlæg cron-job ───────────────────────────────────────────────────
-  logger.info(`Planlægger cron-job: "${config.bot.cronSchedule}"`);
-
-  cron.schedule(config.bot.cronSchedule, () => {
-    run().catch((err) => logger.error('Uventet cron-fejl:', err));
-  });
+  // ── Planlæg cron-jobs ──────────────────────────────────────────────────
+  // Kl. 08:00 og 18:45 hver dag
+  const schedules = ['0 8 * * *', '45 18 * * *'];
+  for (const schedule of schedules) {
+    logger.info(`Planlægger cron-job: "${schedule}"`);
+    cron.schedule(schedule, () => {
+      run().catch((err) => logger.error('Uventet cron-fejl:', err));
+    });
+  }
 
   logger.info('Bot er aktiv og venter på næste kørsel…');
 }

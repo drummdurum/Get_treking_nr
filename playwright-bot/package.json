@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "run-once": "ts-node src/index.ts --once"
+    "run-once": "ts-node src/index.ts --once",
+    "debug:wp": "ts-node src/debug-wordpress-auth.ts"
   },
   "dependencies": {
     "axios": "^1.7.2",

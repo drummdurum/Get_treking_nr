@@ -11,10 +11,20 @@ function require_env(key: string): string {
   return value;
 }
 
+function require_api_key(): string {
+  const wpKey = process.env.WP_API_KEY;
+  const kgKey = process.env.KG_TRACKING_API_KEY;
+  const key = wpKey ?? kgKey;
+  if (!key) {
+    throw new Error('Manglende miljøvariabel: WP_API_KEY eller KG_TRACKING_API_KEY.');
+  }
+  return key;
+}
+
 export const config = {
   wp: {
     baseUrl:  require_env('WP_BASE_URL').replace(/\/$/, ''),
-    apiKey:   require_env('WP_API_KEY'),
+    apiKey:   require_api_key(),
   },
   ao: {
     loginUrl: process.env.AO_LOGIN_URL ?? 'https://www.ao.dk/login',
@@ -27,6 +37,7 @@ export const config = {
     pageTimeoutMs:      parseInt(process.env.PAGE_TIMEOUT_MS       ?? '30000', 10),
     runOnStartup:       process.env.RUN_ON_STARTUP        !== 'false',
     headless:           process.env.HEADLESS              !== 'false',
+    testOrderLimit:     process.env.TEST_ORDER_LIMIT ? parseInt(process.env.TEST_ORDER_LIMIT, 10) : undefined,
   },
   log: {
     level:  process.env.LOG_LEVEL ?? 'info',

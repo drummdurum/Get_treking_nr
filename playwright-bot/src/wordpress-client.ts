@@ -16,8 +16,24 @@ const http: AxiosInstance = axios.create({
   timeout: 15_000,
   headers: {
     'Content-Type': 'application/json',
+    // Send both header variants to support both deployed and local plugin versions.
+    'X-API-Key': config.wp.apiKey,
     'X-KG-API-Key': config.wp.apiKey,
   },
+  // Strip any PHP warnings / HTML output before the JSON (can happen if plugin
+  // file has a BOM or whitespace before <?php on the server).
+  transformResponse: [(data: unknown) => {
+    if (typeof data !== 'string') return data;
+    const jsonStart = data.indexOf('[');
+    const jsonStartObj = data.indexOf('{');
+    const idx = jsonStart === -1 ? jsonStartObj
+               : jsonStartObj === -1 ? jsonStart
+               : Math.min(jsonStart, jsonStartObj);
+    if (idx > 0) {
+      try { return JSON.parse(data.slice(idx)); } catch { /* fall through */ }
+    }
+    try { return JSON.parse(data); } catch { return data; }
+  }],
 });
 
 // ---------------------------------------------------------------------------
