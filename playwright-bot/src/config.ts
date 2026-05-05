@@ -31,6 +31,11 @@ export const config = {
     username: require_env('AO_USERNAME'),
     password: require_env('AO_PASSWORD'),
   },
+  ahlsell: {
+    baseUrl:  process.env.AHLSELL_BASE_URL ?? 'https://www.ahlsell.dk/da',
+    username: process.env.AS_USERNAME ?? process.env.AHLSELL_USERNAME ?? '',
+    password: process.env.AS_PASSWORD ?? process.env.AHLSELL_PASSWORD ?? '',
+  },
   bot: {
     cronSchedule:       process.env.CRON_SCHEDULE        ?? '0 3 * * *',
     maxRetriesPerOrder: parseInt(process.env.MAX_RETRIES_PER_ORDER ?? '10', 10),

@@ -13,9 +13,9 @@
  */
 
 import { Browser, BrowserContext, Page, chromium } from 'playwright';
-import { config } from './config';
-import { logger } from './logger';
-import type { ScrapeResult, TrackingItem } from './types';
+import { config } from '../config';
+import { logger } from '../logger';
+import type { ScrapeResult, TrackingItem } from '../types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module-level browser singleton (reused across orders in one bot run)

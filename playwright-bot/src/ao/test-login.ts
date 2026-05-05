@@ -9,7 +9,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { chromium } from 'playwright';
-import { config } from './config';
+import { config } from '../config';
 
 async function main() {
   console.log('\n══════════════════════════════════════════');

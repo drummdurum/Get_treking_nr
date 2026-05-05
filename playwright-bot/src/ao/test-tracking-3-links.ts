@@ -10,7 +10,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import { launchAndLogin, getTrackingForOrder, closeBrowser } from './ao-scraper';
+import { launchAndLogin, getTrackingForOrder, closeBrowser } from './ao-scraper'; // ao-scraper er i samme mappe
 
 const AO_ORDER_REF = '33733';
 const EXPECTED_TRACKINGS_RAW = ['FW827450', 'FW827447', 'FW827450'];

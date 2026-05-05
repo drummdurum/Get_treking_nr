@@ -21,11 +21,56 @@ import {
   markOrderChecked,
 } from './wordpress-client';
 import {
-  launchAndLogin,
-  getTrackingForOrder,
-  closeBrowser,
-} from './ao-scraper';
-import type { RunSummary } from './types';
+  launchAndLogin as launchAoAndLogin,
+  getTrackingForOrder as getAoTrackingForOrder,
+  closeBrowser as closeAoBrowser,
+} from './ao/ao-scraper';
+import {
+  launchAndLogin as launchAhlsellAndLogin,
+  getTrackingForOrder as getAhlsellTrackingForOrder,
+  closeBrowser as closeAhlsellBrowser,
+} from './ashley/ashley';
+import type { RunSummary, ScrapeResult } from './types';
+
+type ProviderName = 'ao' | 'ahlsell';
+
+interface TrackingProvider {
+  name: ProviderName;
+  launchAndLogin: () => Promise<void>;
+  getTrackingForOrder: (reference: string) => Promise<ScrapeResult>;
+  closeBrowser: () => Promise<void>;
+}
+
+const PROVIDERS: Record<ProviderName, TrackingProvider> = {
+  ao: {
+    name: 'ao',
+    launchAndLogin: launchAoAndLogin,
+    getTrackingForOrder: getAoTrackingForOrder,
+    closeBrowser: closeAoBrowser,
+  },
+  ahlsell: {
+    name: 'ahlsell',
+    launchAndLogin: launchAhlsellAndLogin,
+    getTrackingForOrder: getAhlsellTrackingForOrder,
+    closeBrowser: closeAhlsellBrowser,
+  },
+};
+
+function isBrowserRelatedError(message?: string): boolean {
+  const m = (message ?? '').toLowerCase();
+  return m.includes('browser') || m.includes('lukket');
+}
+
+function getProviderSequence(): ProviderName[] {
+  const raw = (process.env.SCRAPER_PROVIDERS ?? 'ao,ahlsell').toLowerCase();
+  const requested = raw
+    .split(',')
+    .map((x) => x.trim())
+    .filter((x): x is ProviderName => x === 'ao' || x === 'ahlsell');
+
+  const unique = [...new Set(requested)];
+  return unique.length > 0 ? unique : ['ao', 'ahlsell'];
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main run function
@@ -76,13 +121,34 @@ async function run(): Promise<void> {
     }
   }
 
-  logger.info(`${orders.length} ordre(r) mangler tracking. Starter browser…`);
+  logger.info(`${orders.length} ordre(r) mangler tracking. Starter browser(e)…`);
 
-  // ── 2. Start browser og log ind ────────────────────────────────────────
-  try {
-    await launchAndLogin();
-  } catch (err: unknown) {
-    logger.error('Browser/login fejlede – afbryder:', err);
+  const providerSequence = getProviderSequence();
+  const activeProviders: TrackingProvider[] = [];
+
+  // ── 2. Start browser og log ind for hver provider (én ad gangen) ───────
+  for (const providerName of providerSequence) {
+    if (
+      providerName === 'ahlsell' &&
+      (!config.ahlsell.username || !config.ahlsell.password)
+    ) {
+      logger.warn('Springer Ahlsell over: mangler AHLSELL/AS brugernavn eller kodeord.');
+      continue;
+    }
+
+    const provider = PROVIDERS[providerName];
+    try {
+      logger.info(`Starter provider: ${provider.name}`);
+      await provider.launchAndLogin();
+      activeProviders.push(provider);
+      logger.info(`Provider klar: ${provider.name}`);
+    } catch (err: unknown) {
+      logger.error(`Provider ${provider.name} kunne ikke starte/login:`, err);
+    }
+  }
+
+  if (activeProviders.length === 0) {
+    logger.error('Ingen tracking providers er klar – afbryder denne kørsel.');
     summary.errors = orders.length;
     logSummary(summary);
     return;
@@ -98,71 +164,88 @@ async function run(): Promise<void> {
     );
 
     try {
-      let result = await getTrackingForOrder(aoRef);
+      let finalResult: ScrapeResult | null = null;
+      let sawNotReady = false;
+      let sawNotFound = false;
+      let lastErrorMessage: string | undefined;
 
-      // Browser crashede – forsøg at genstarte og login igen
-      if (!result.success && result.reason === 'error' && result.message?.includes('browser')) {
-        logger.warn('Browser lukket uventet – forsøger at genstarte…');
-        try {
-          await launchAndLogin();
-          result = await getTrackingForOrder(aoRef);
-        } catch (restartErr) {
-          logger.error('Kunne ikke genstarte browser:', restartErr);
-          summary.errors += orders.slice(orders.indexOf(order)).length;
+      for (const provider of activeProviders) {
+        logger.info(`Opslag via ${provider.name} for ordre #${order.order_id}`);
+        let result = await provider.getTrackingForOrder(aoRef);
+
+        // Browser crashede for denne provider – forsøg genstart én gang
+        if (!result.success && result.reason === 'error' && isBrowserRelatedError(result.message)) {
+          logger.warn(`Browser lukket uventet hos ${provider.name} – forsøger genstart…`);
+          try {
+            await provider.closeBrowser().catch(() => {});
+            await provider.launchAndLogin();
+            result = await provider.getTrackingForOrder(aoRef);
+          } catch (restartErr) {
+            logger.error(`Kunne ikke genstarte ${provider.name}:`, restartErr);
+            lastErrorMessage = String(restartErr);
+            continue;
+          }
+        }
+
+        if (result.success) {
+          finalResult = result;
+          logger.info(`Tracking fundet via ${provider.name} for ordre #${order.order_id}`);
           break;
         }
-        if (!result.success && result.reason === 'error') {
-          logger.error(`Ordre #${order.order_id} fejlede også efter browser-genstart: ${result.message}`);
+
+        if (result.reason === 'not_ready') sawNotReady = true;
+        if (result.reason === 'not_found') sawNotFound = true;
+        if (result.reason === 'error') lastErrorMessage = result.message;
+      }
+
+      if (!finalResult) {
+        if (sawNotReady) {
+          logger.info(
+            `Tracking ikke klar til ordre #${order.order_id}. ` +
+            `(${order.check_count + 1}/${config.bot.maxRetriesPerOrder} forsøg)`
+          );
+          await markOrderChecked(order.order_id);
+          summary.trackingNotReady++;
+
+          if (order.check_count + 1 >= config.bot.maxRetriesPerOrder) {
+            logger.warn(
+              `Ordre #${order.order_id} har nået max ${config.bot.maxRetriesPerOrder} forsøg ` +
+              `uden tracking – botten vil ikke tjekke den igen.`
+            );
+          }
+          continue;
+        }
+
+        if (sawNotFound) {
+          logger.warn(
+            `Reference ${order.ao_reference} ikke fundet hos nogen provider. ` +
+            `Tjek at referencenummeret er korrekt på ordre #${order.order_id}.`
+          );
+          await markOrderChecked(order.order_id);
           summary.errors++;
           continue;
         }
-      }
 
-      if (result.success) {
-        // Post ALLE forsendelser til WooCommerce (kan være flere fragtbreve på én ordre)
-        for (const item of result.trackingItems) {
-          await postTracking({
-            order_id:        order.order_id,
-            tracking_number: item.trackingNumber,
-            carrier:         item.carrier,
-          });
-        }
-        logger.info(
-          `${result.trackingItems.length} forsendelse(r) gemt på ordre #${order.order_id}: ` +
-          result.trackingItems.map(t => `${t.carrier}/${t.trackingNumber}`).join(', ')
-        );
-        summary.trackingUpdated++;
-
-      } else if (result.reason === 'not_ready') {
-        // Tracking ikke klar endnu → inkrementer check-tæller
-        logger.info(
-          `Tracking ikke klar til ordre #${order.order_id}. ` +
-          `(${order.check_count + 1}/${config.bot.maxRetriesPerOrder} forsøg)`
-        );
-        await markOrderChecked(order.order_id);
-        summary.trackingNotReady++;
-
-        if (order.check_count + 1 >= config.bot.maxRetriesPerOrder) {
-          logger.warn(
-            `Ordre #${order.order_id} har nået max ${config.bot.maxRetriesPerOrder} forsøg ` +
-            `uden tracking – botten vil ikke tjekke den igen.`
-          );
-        }
-
-      } else if (result.reason === 'not_found') {
-        logger.warn(
-          `AO reference ${order.ao_reference} ikke fundet på AO-portalen. ` +
-          `Tjek at referencenummeret er korrekt på ordre #${order.order_id}.`
-        );
-        await markOrderChecked(order.order_id);
-        summary.errors++;
-
-      } else {
         logger.error(
-          `Fejl ved opslag af ordre #${order.order_id}: ${result.message ?? result.reason}`
+          `Fejl ved opslag af ordre #${order.order_id}: ${lastErrorMessage ?? 'ukendt fejl'}`
         );
         summary.errors++;
+        continue;
       }
+
+      // Post ALLE forsendelser til WooCommerce (kan være flere fragtbreve på én ordre)
+      for (const item of finalResult.trackingItems) {
+        await postTracking({
+          order_id:        order.order_id,
+          tracking_number: item.trackingNumber,
+          carrier:         item.carrier,
+        });
+      }
+      logger.info(
+        `${finalResult.trackingItems.length} forsendelse(r) gemt på ordre #${order.order_id}: ` +
+        finalResult.trackingItems.map(t => `${t.carrier}/${t.trackingNumber}`).join(', ')
+      );
+      summary.trackingUpdated++;
 
     } catch (err: unknown) {
       logger.error(`Uventet fejl for ordre #${order.order_id}:`, err);
@@ -170,8 +253,12 @@ async function run(): Promise<void> {
     }
   }
 
-  // ── 4. Luk browser ─────────────────────────────────────────────────────
-  await closeBrowser();
+  // ── 4. Luk browser(e) ──────────────────────────────────────────────────
+  for (const provider of activeProviders) {
+    await provider.closeBrowser().catch((err) => {
+      logger.warn(`Kunne ikke lukke browser for ${provider.name}: ${String(err)}`);
+    });
+  }
 
   // ── 5. Log sammendrag ──────────────────────────────────────────────────
   summary.finishedAt = new Date();

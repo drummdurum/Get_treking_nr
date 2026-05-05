@@ -13,8 +13,8 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import axios from 'axios';
-import { config } from './config';
-import { logger } from './logger';
+import { config } from '../config';
+import { logger } from '../logger';
 
 const args = process.argv.slice(2);
 const orderIdArg = args[args.indexOf('--order-id') + 1];
