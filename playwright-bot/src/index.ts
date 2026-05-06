@@ -301,13 +301,13 @@ if (runOnce) {
   }
 
   // ── Planlæg cron-jobs ──────────────────────────────────────────────────
-  // Kl. 08:00 og 18:45 hver dag
-  const schedules = ['0 8 * * *', '45 18 * * *'];
+  // Kl. 07:00, 10:00 og 18:45 hver dag
+  const schedules = ['0 7 * * *', '0 10 * * *', '45 18 * * *'];
   for (const schedule of schedules) {
-    logger.info(`Planlægger cron-job: "${schedule}"`);
+    logger.info(`Planlægger cron-job: "${schedule}" (timezone: ${config.bot.cronTimezone})`);
     cron.schedule(schedule, () => {
       run().catch((err) => logger.error('Uventet cron-fejl:', err));
-    });
+    }, { timezone: config.bot.cronTimezone });
   }
 
   logger.info('Bot er aktiv og venter på næste kørsel…');
