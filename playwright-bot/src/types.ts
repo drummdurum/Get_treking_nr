@@ -68,3 +68,12 @@ export interface RunSummary {
   startedAt: Date;
   finishedAt: Date;
 }
+
+/**
+ * En ordre hvor tracking er blevet opdateret i denne kørsel
+ */
+export interface UpdatedOrder {
+  orderId: number;
+  carrier: string;
+  trackingNumber: string;
+}

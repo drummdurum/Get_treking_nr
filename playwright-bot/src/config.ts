@@ -49,4 +49,9 @@ export const config = {
     level:  process.env.LOG_LEVEL ?? 'info',
     logDir: path.resolve(process.env.LOG_DIR ?? './logs'),
   },
+  mail: {
+    apiKey: process.env.RESEND_API_KEY ?? '',
+    from:   process.env.RESEND_FROM   ?? '',
+    to:     process.env.RESEND_TO     ?? '',
+  },
 } as const;
