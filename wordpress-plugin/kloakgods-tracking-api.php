@@ -143,11 +143,11 @@ class Kloakgods_Tracking_API {
 
             $result[] = [
                 'order_id'     => $order->get_id(),
-                'ao_reference' => get_post_meta( $order->get_id(), self::META_AO_REFERENCE, true ),
+                'ao_reference' => $order->get_meta( self::META_AO_REFERENCE, true ),
                 'status'       => $order->get_status(),
                 'date'         => $order->get_date_created()->format( 'c' ),
-                'check_count'  => (int) get_post_meta( $order->get_id(), self::META_CHECK_COUNT, true ),
-                'last_checked' => get_post_meta( $order->get_id(), self::META_CHECKED_AT, true ) ?: null,
+                'check_count'  => (int) $order->get_meta( self::META_CHECK_COUNT, true ),
+                'last_checked' => $order->get_meta( self::META_CHECKED_AT, true ) ?: null,
             ];
         }
 
@@ -184,19 +184,20 @@ class Kloakgods_Tracking_API {
         ];
 
         // Preserve existing tracking items and append the new one
-        $existing = get_post_meta( $order_id, self::META_WC_TRACKING, true );
+        $existing = $order->get_meta( self::META_WC_TRACKING, true );
         if ( ! is_array( $existing ) ) {
             $existing = [];
         }
         $existing[] = $tracking_item;
 
-        update_post_meta( $order_id, self::META_WC_TRACKING, $existing );
+        $order->update_meta_data( self::META_WC_TRACKING, $existing );
 
         // ------------------------------------------------------------------
         // Also store flat meta for easy querying / display
         // ------------------------------------------------------------------
-        update_post_meta( $order_id, '_tracking_number', sanitize_text_field( $tracking_number ) );
-        update_post_meta( $order_id, '_tracking_carrier', sanitize_text_field( $carrier ) );
+        $order->update_meta_data( '_tracking_number', sanitize_text_field( $tracking_number ) );
+        $order->update_meta_data( '_tracking_carrier', sanitize_text_field( $carrier ) );
+        $order->save();
 
         // ------------------------------------------------------------------
         // Optionally add an order note
@@ -217,8 +218,9 @@ class Kloakgods_Tracking_API {
         // ------------------------------------------------------------------
         // Clear "check" counters now that we have tracking
         // ------------------------------------------------------------------
-        delete_post_meta( $order_id, self::META_CHECK_COUNT );
-        delete_post_meta( $order_id, self::META_CHECKED_AT );
+        $order->delete_meta_data( self::META_CHECK_COUNT );
+        $order->delete_meta_data( self::META_CHECKED_AT );
+        $order->save();
 
         return new WP_REST_Response( [
             'success'  => true,
@@ -239,9 +241,10 @@ class Kloakgods_Tracking_API {
             return new WP_REST_Response( [ 'error' => "Order {$order_id} not found." ], 404 );
         }
 
-        $count = (int) get_post_meta( $order_id, self::META_CHECK_COUNT, true );
-        update_post_meta( $order_id, self::META_CHECK_COUNT, $count + 1 );
-        update_post_meta( $order_id, self::META_CHECKED_AT, gmdate( 'c' ) );
+        $count = (int) $order->get_meta( self::META_CHECK_COUNT, true );
+        $order->update_meta_data( self::META_CHECK_COUNT, $count + 1 );
+        $order->update_meta_data( self::META_CHECKED_AT, gmdate( 'c' ) );
+        $order->save();
 
         return new WP_REST_Response( [
             'success'     => true,
@@ -255,12 +258,12 @@ class Kloakgods_Tracking_API {
     // -------------------------------------------------------------------------
 
     private function order_has_tracking( $order ): bool {
-        $items = get_post_meta( $order->get_id(), self::META_WC_TRACKING, true );
+        $items = $order->get_meta( self::META_WC_TRACKING, true );
         if ( is_array( $items ) && count( $items ) > 0 ) {
             return true;
         }
         // Fallback: check flat meta
-        $flat = get_post_meta( $order->get_id(), '_tracking_number', true );
+        $flat = $order->get_meta( '_tracking_number', true );
         return ! empty( $flat );
     }
 
@@ -309,9 +312,10 @@ class Kloakgods_Tracking_API {
             ? $post_or_order->get_id()
             : $post_or_order->ID;
 
-        $ao_ref     = esc_attr( get_post_meta( $order_id, self::META_AO_REFERENCE, true ) );
-        $checked_at = get_post_meta( $order_id, self::META_CHECKED_AT, true );
-        $count      = (int) get_post_meta( $order_id, self::META_CHECK_COUNT, true );
+        $order_obj  = wc_get_order( $order_id );
+        $ao_ref     = $order_obj ? esc_attr( $order_obj->get_meta( self::META_AO_REFERENCE, true ) ) : '';
+        $checked_at = $order_obj ? $order_obj->get_meta( self::META_CHECKED_AT, true ) : '';
+        $count      = $order_obj ? (int) $order_obj->get_meta( self::META_CHECK_COUNT, true ) : 0;
 
         wp_nonce_field( 'kloakgods_save_ao_meta', 'kloakgods_ao_nonce' );
         ?>
@@ -341,11 +345,14 @@ class Kloakgods_Tracking_API {
         }
 
         if ( isset( $_POST['ao_reference_number'] ) ) {
-            update_post_meta(
-                $order_id,
-                self::META_AO_REFERENCE,
-                sanitize_text_field( wp_unslash( $_POST['ao_reference_number'] ) )
-            );
+            $order_obj = wc_get_order( $order_id );
+            if ( $order_obj ) {
+                $order_obj->update_meta_data(
+                    self::META_AO_REFERENCE,
+                    sanitize_text_field( wp_unslash( $_POST['ao_reference_number'] ) )
+                );
+                $order_obj->save();
+            }
         }
     }
 

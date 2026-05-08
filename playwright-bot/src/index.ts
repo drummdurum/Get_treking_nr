@@ -30,7 +30,8 @@ import {
   getTrackingForOrder as getAhlsellTrackingForOrder,
   closeBrowser as closeAhlsellBrowser,
 } from './ashley/ashley';
-import type { RunSummary, ScrapeResult } from './types';
+import { sendMorningReport } from './mailer';
+import type { RunSummary, ScrapeResult, UpdatedOrder } from './types';
 
 type ProviderName = 'ao' | 'ahlsell';
 
@@ -76,8 +77,9 @@ function getProviderSequence(): ProviderName[] {
 // Main run function
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function run(): Promise<void> {
+async function run(sendEmail = false): Promise<void> {
   const startedAt = new Date();
+  const updatedOrders: UpdatedOrder[] = [];
   const summary: RunSummary = {
     ordersFound:     0,
     trackingUpdated: 0,
@@ -246,6 +248,9 @@ async function run(): Promise<void> {
         finalResult.trackingItems.map(t => `${t.carrier}/${t.trackingNumber}`).join(', ')
       );
       summary.trackingUpdated++;
+      for (const item of finalResult.trackingItems) {
+        updatedOrders.push({ orderId: order.order_id, carrier: item.carrier, trackingNumber: item.trackingNumber });
+      }
 
     } catch (err: unknown) {
       logger.error(`Uventet fejl for ordre #${order.order_id}:`, err);
@@ -263,6 +268,11 @@ async function run(): Promise<void> {
   // ── 5. Log sammendrag ──────────────────────────────────────────────────
   summary.finishedAt = new Date();
   logSummary(summary);
+
+  // ── 6. Send email-rapport (kun ved morgenkørsel) ───────────────────────
+  if (sendEmail) {
+    await sendMorningReport(summary, updatedOrders);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -301,12 +311,16 @@ if (runOnce) {
   }
 
   // ── Planlæg cron-jobs ──────────────────────────────────────────────────
-  // Kl. 07:00, 10:00 og 18:45 hver dag
-  const schedules = ['0 7 * * *', '0 10 * * *', '45 18 * * *'];
-  for (const schedule of schedules) {
-    logger.info(`Planlægger cron-job: "${schedule}" (timezone: ${config.bot.cronTimezone})`);
+  // Kl. 07:00 (morgen – sender email), 10:00 og 18:45
+  const schedules: Array<{ cron: string; sendEmail: boolean }> = [
+    { cron: '0 7 * * *',  sendEmail: true  },
+    { cron: '0 10 * * *', sendEmail: false },
+    { cron: '45 18 * * *', sendEmail: false },
+  ];
+  for (const { cron: schedule, sendEmail } of schedules) {
+    logger.info(`Planlægger cron-job: "${schedule}" (timezone: ${config.bot.cronTimezone})${sendEmail ? ' – sender email' : ''}`);
     cron.schedule(schedule, () => {
-      run().catch((err) => logger.error('Uventet cron-fejl:', err));
+      run(sendEmail).catch((err) => logger.error('Uventet cron-fejl:', err));
     }, { timezone: config.bot.cronTimezone });
   }
 
