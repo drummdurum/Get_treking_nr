@@ -235,8 +235,13 @@ async function run(sendEmail = false): Promise<void> {
         continue;
       }
 
-      // Post ALLE forsendelser til WooCommerce (kan være flere fragtbreve på én ordre)
-      for (const item of finalResult.trackingItems) {
+      // Post kun unikke forsendelser til WooCommerce (undgår dubletter)
+      const uniqueTrackingItems = finalResult.trackingItems.filter((item, index, arr) => {
+        const key = `${item.carrier}|${item.trackingNumber}`;
+        return arr.findIndex((x) => `${x.carrier}|${x.trackingNumber}` === key) === index;
+      });
+
+      for (const item of uniqueTrackingItems) {
         await postTracking({
           order_id:        order.order_id,
           tracking_number: item.trackingNumber,
@@ -244,11 +249,11 @@ async function run(sendEmail = false): Promise<void> {
         });
       }
       logger.info(
-        `${finalResult.trackingItems.length} forsendelse(r) gemt på ordre #${order.order_id}: ` +
-        finalResult.trackingItems.map(t => `${t.carrier}/${t.trackingNumber}`).join(', ')
+        `${uniqueTrackingItems.length} forsendelse(r) gemt på ordre #${order.order_id}: ` +
+        uniqueTrackingItems.map(t => `${t.carrier}/${t.trackingNumber}`).join(', ')
       );
       summary.trackingUpdated++;
-      for (const item of finalResult.trackingItems) {
+      for (const item of uniqueTrackingItems) {
         updatedOrders.push({ orderId: order.order_id, carrier: item.carrier, trackingNumber: item.trackingNumber });
       }
 

@@ -6,7 +6,7 @@
 import { Browser, BrowserContext, chromium } from 'playwright';
 import { config } from '../config';
 import { logger } from '../logger';
-import type { ScrapeResult } from '../types';
+import type { ScrapeResult, TrackingItem } from '../types';
 
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
@@ -42,6 +42,7 @@ export async function getTrackingForOrder(reference: string): Promise<ScrapeResu
 
   const page = await context.newPage();
   page.setDefaultTimeout(config.bot.pageTimeoutMs);
+  const trackingItems: TrackingItem[] = [];
 
   try {
     const ordersLoadTimeoutMs = Math.max(config.bot.pageTimeoutMs, 60_000);
@@ -216,22 +217,35 @@ export async function getTrackingForOrder(reference: string): Promise<ScrapeResu
         });
 
         if (parsed.trackingNumber) {
+          const carrier = parsed.carrier ?? 'Danske Fragtmaend';
+          const trackingUrl = `https://tracking.postnord.com/tracking/#/search?id=${parsed.trackingNumber}`;
           logger.info(`[Ahlsell] Tracking fundet for ${reference}: ${parsed.trackingNumber}`);
-          return {
-            success: true,
+          trackingItems.push({
             trackingNumber: parsed.trackingNumber,
-            carrier: parsed.carrier ?? 'Danske Fragtmaend',
-            trackingUrl: `https://tracking.postnord.com/tracking/#/search?id=${parsed.trackingNumber}`,
-            trackingItems: [{
-              trackingNumber: parsed.trackingNumber,
-              carrier: parsed.carrier ?? 'Danske Fragtmaend',
-              trackingUrl: `https://tracking.postnord.com/tracking/#/search?id=${parsed.trackingNumber}`,
-            }],
-          };
+            carrier,
+            trackingUrl,
+          });
         }
       } finally {
         await detailPage.close().catch(() => {});
       }
+    }
+
+    const uniqueTrackingItems = trackingItems.filter((item, index, arr) => {
+      const key = `${item.carrier}|${item.trackingNumber}`;
+      return arr.findIndex((x) => `${x.carrier}|${x.trackingNumber}` === key) === index;
+    });
+
+    if (uniqueTrackingItems.length > 0) {
+      logger.info(`[Ahlsell] Returnerer ${uniqueTrackingItems.length} unik(ke) trackingnummer(e) for ${reference}.`);
+      const first = uniqueTrackingItems[0];
+      return {
+        success: true,
+        trackingNumber: first.trackingNumber,
+        carrier: first.carrier,
+        trackingUrl: first.trackingUrl,
+        trackingItems: uniqueTrackingItems,
+      };
     }
 
     return {

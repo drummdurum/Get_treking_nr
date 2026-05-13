@@ -216,7 +216,10 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
   }, aoReference);
 
   const { found, status: statusText, ttHrefs } = scanResult;
-  logger.debug(`Scan-resultat: found=${found}, status="${statusText}", ttHrefs=${ttHrefs.length} link(s)`);
+  const uniqueTtHrefs = [...new Set(ttHrefs.map((href) => href.trim()).filter(Boolean))];
+  logger.debug(
+    `Scan-resultat: found=${found}, status="${statusText}", ttHrefs=${ttHrefs.length} link(s), unique=${uniqueTtHrefs.length}`
+  );
 
   if (!found) {
     logger.debug(`Reference #${aoReference} ikke fundet i leveringsoversigt.`);
@@ -237,7 +240,7 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
   }
 
   // ── Trin 5: Hent fragtbrevsnummer fra ALLE T&T-links ─────────────────
-  if (ttHrefs.length === 0) {
+  if (uniqueTtHrefs.length === 0) {
     logger.debug(`Ingen T&T link endnu for #${aoReference} (status: "${statusText}").`);
     return {
       success: false,
@@ -248,7 +251,7 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
 
   const trackingItems: TrackingItem[] = [];
 
-  for (const ttHref of ttHrefs) {
+  for (const ttHref of uniqueTtHrefs) {
     // GLS Express: brug bookingRef som trackingnummer
     if (ttHref.includes('booking-glsexpress.dk')) {
       const match = ttHref.match(/bookingRef=([^&]+)/);
@@ -306,15 +309,28 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
     trackingItems.push({ trackingNumber, carrier: 'Danske Fragtmænd', trackingUrl: ttHref });
   }
 
-  logger.debug(`Fandt ${trackingItems.length} forsendelse(r) på ordre #${aoReference}: ${trackingItems.map(t => t.trackingNumber).join(', ')}`);
+  const uniqueTrackingItems: TrackingItem[] = [];
+  const seenTrackingKeys = new Set<string>();
+  for (const item of trackingItems) {
+    const key = `${item.carrier}|${item.trackingNumber}`;
+    if (seenTrackingKeys.has(key)) continue;
+    seenTrackingKeys.add(key);
+    uniqueTrackingItems.push(item);
+  }
 
-  const first = trackingItems[0];
+  logger.debug(
+    `Fandt ${uniqueTrackingItems.length} unik(ke) forsendelse(r) på ordre #${aoReference}: ${uniqueTrackingItems
+      .map((t) => t.trackingNumber)
+      .join(', ')}`
+  );
+
+  const first = uniqueTrackingItems[0];
   return {
     success: true,
     trackingNumber: first.trackingNumber,
     carrier: first.carrier,
     trackingUrl: first.trackingUrl,
-    trackingItems,
+    trackingItems: uniqueTrackingItems,
   };
 }
 
