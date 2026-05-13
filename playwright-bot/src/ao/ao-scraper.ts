@@ -156,6 +156,36 @@ async function login(): Promise<void> {
 const NOT_READY_STATUSES = ['under plukning', 'afventer', 'annulleret', 'pakket', 'kommende'];
 
 async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeResult> {
+  const scanOrderRows = async () => {
+    return await page.evaluate((aoRef) => {
+      const normalize = (v: string): string => v.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+      const target = normalize(aoRef);
+
+      const tbodies = Array.from(document.querySelectorAll('tbody'));
+      for (const tbody of tbodies) {
+        for (const row of Array.from(tbody.querySelectorAll('tr'))) {
+          const tds = row.querySelectorAll('td');
+          if (tds.length < 5) continue; // Spring "ingen data"-rækker over
+
+          const cellTexts = Array.from(tds).map((td) => (td.textContent ?? '').trim());
+          const rowHasReference = cellTexts.some((txt) => normalize(txt).includes(target));
+          if (rowHasReference) {
+            const status = (tds[4]?.textContent ?? '').trim().toLowerCase();
+            const allAnchors = Array.from(row.querySelectorAll(
+              'a[href*="trace.fragt.dk"], a[href*="booking-glsexpress.dk"], a[href*="postnord"], a[href*="nsp.postnord.com"], a[href*="portal.postnord.com"]'
+            )) as HTMLAnchorElement[];
+            const ttHrefs: string[] = [];
+            for (const a of allAnchors) {
+              if (a.href) ttHrefs.push(a.href);
+            }
+            return { found: true, status, ttHrefs };
+          }
+        }
+      }
+      return { found: false, status: '', ttHrefs: [] as string[] };
+    }, aoReference);
+  };
+
   const baseUrl = new URL(config.ao.loginUrl).origin;
   const url = `${baseUrl}/mit-overblik/leveringsoversigt`;
 
@@ -163,13 +193,24 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
   logger.debug('Navigerer til leveringsoversigt…');
   await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-  // Tjek at session stadig er aktiv
-  const loginVisible = await page.locator('#username').isVisible().catch(() => false);
-  if (loginVisible) {
-    logger.warn('Session udløbet – logger ind igen…');
+  // Vent kort på at søgefeltet bliver synligt før vi vurderer login-status.
+  const hasSearchInput = await page
+    .waitForSelector('input#searchTextInput', { state: 'visible', timeout: 8_000 })
+    .then(() => true)
+    .catch(() => false);
+  const hasLoginForm = await page
+    .locator('#username:visible, #password:visible, button[type="submit"]:has-text("Log ind")')
+    .first()
+    .isVisible()
+    .catch(() => false);
+  const onLoginPage = /\/login/i.test(page.url());
+
+  if (!hasSearchInput || hasLoginForm || onLoginPage) {
+    logger.warn('Session mangler/udløbet – logger ind igen…');
     isLoggedIn = false;
     await login();
     await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('input#searchTextInput', { timeout: config.bot.pageTimeoutMs });
   }
 
   // ── Trin 2: Søg på reference ──────────────────────────────────────────
@@ -191,29 +232,23 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
   // ── Trin 3: Scan alle tbody-rækker direkte i browseren ───────────────
   // Bruger page.evaluate() for at undgå Playwright-timeout og "stale element"
   // problemer med Vues virtuelle DOM.
-  const scanResult = await page.evaluate((aoRef) => {
-    const tbodies = Array.from(document.querySelectorAll('tbody'));
-    for (const tbody of tbodies) {
-      for (const row of Array.from(tbody.querySelectorAll('tr'))) {
-        const tds = row.querySelectorAll('td');
-        if (tds.length < 5) continue; // Spring "ingen data"-rækker over
-        const refCell = (tds[2]?.textContent ?? '').trim();
-        if (refCell === `#${aoRef}` || refCell.includes(`#${aoRef}`)) {
-          const status = (tds[4]?.textContent ?? '').trim().toLowerCase();
-          // Saml ALLE T&T-links i rækken i original rækkefølge (inkl. evt. dubletter)
-          const allAnchors = Array.from(row.querySelectorAll(
-            'a[href*="trace.fragt.dk"], a[href*="booking-glsexpress.dk"]'
-          )) as HTMLAnchorElement[];
-          const ttHrefs: string[] = [];
-          for (const a of allAnchors) {
-            if (a.href) ttHrefs.push(a.href);
-          }
-          return { found: true, status, ttHrefs };
-        }
-      }
-    }
-    return { found: false, status: '', ttHrefs: [] as string[] };
-  }, aoReference);
+  let scanResult = await scanOrderRows();
+
+  // Hvis første scan ikke finder referencen, så prøv én refresh + ny søgning.
+  if (!scanResult.found) {
+    logger.warn(`Reference #${aoReference} ikke fundet i første scan – prøver refresh + ny søgning…`);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('input#searchTextInput', { timeout: config.bot.pageTimeoutMs });
+    await page.fill('input#searchTextInput', `#${aoReference}`);
+    await page.click('button[type="submit"]');
+    await page.waitForFunction(() => {
+      const btn = document.querySelector('button[type="submit"]');
+      if (!btn) return false;
+      const spinner = btn.querySelector('div[style]') as HTMLElement | null;
+      return spinner ? spinner.style.display === 'none' : true;
+    }, { timeout: 15_000 }).catch(() => {});
+    scanResult = await scanOrderRows();
+  }
 
   const { found, status: statusText, ttHrefs } = scanResult;
   const uniqueTtHrefs = [...new Set(ttHrefs.map((href) => href.trim()).filter(Boolean))];
@@ -261,6 +296,41 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
       continue;
     }
 
+    // PostNord: forsøg først at læse fuldt "Pakke"-nummer fra siden,
+    // fallback til id-param i URL (fx ?id=3570...).
+    if (ttHref.includes('postnord')) {
+      let trackingNumber: string | null = null;
+
+      const detailPage = await context!.newPage();
+      detailPage.setDefaultTimeout(config.bot.pageTimeoutMs);
+      try {
+        await detailPage.goto(ttHref, { waitUntil: 'domcontentloaded' });
+
+        await detailPage
+          .locator('button:has-text("Accept all"), button:has-text("Accepter alle"), [id*="onetrust-accept"], .coi-banner__accept')
+          .first()
+          .click({ timeout: 4_000 })
+          .catch(() => {});
+
+        trackingNumber = await detailPage.evaluate(() => {
+          const txt = document.body?.innerText ?? '';
+          const m = txt.match(/\bPakke\s+([0-9]{10,})\b/i);
+          return m?.[1] ?? null;
+        });
+      } finally {
+        await detailPage.close().catch(() => {});
+      }
+
+      if (!trackingNumber) {
+        const pnMatch = ttHref.match(/[?&]id=([^&]+)/i);
+        trackingNumber = pnMatch?.[1] ? decodeURIComponent(pnMatch[1]) : ttHref;
+      }
+
+      logger.debug(`PostNord tracking: ${trackingNumber}`);
+      trackingItems.push({ trackingNumber, carrier: 'PostNord', trackingUrl: ttHref });
+      continue;
+    }
+
     // Danske Fragtmænd: åbn hvert link i en frisk side for stabil udlæsning
     logger.debug(`Følger trace.fragt.dk-link: ${ttHref}`);
     let fragtbrevsnummer: string | null = null;
@@ -269,9 +339,19 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
 
     try {
       await detailPage.goto(ttHref, { waitUntil: 'domcontentloaded' });
+
+      // PostNord kan vise cookie-banner som blokerer indhold; forsøg at acceptere.
+      if (ttHref.includes('postnord')) {
+        await detailPage
+          .locator('button:has-text("Accept all"), button:has-text("Accepter alle"), [id*="onetrust-accept"], .coi-banner__accept')
+          .first()
+          .click({ timeout: 4_000 })
+          .catch(() => {});
+      }
+
       await detailPage.waitForFunction(() => {
         const txt = document.body?.innerText ?? '';
-        return /Fragtbrevsnummer\s*:|Referencenummer\s*:/i.test(txt);
+        return /Fragtbrevsnummer\s*:|Referencenummer\s*:|Pakke\s+\d{10,}/i.test(txt);
       }, { timeout: 15_000 }).catch(() => {});
 
       fragtbrevsnummer = await detailPage.evaluate(() => {
@@ -298,6 +378,13 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
           if (val) return val.toUpperCase();
         }
 
+        // PostNord-visning kan stå som: "Pakke 00357... Afsender ..."
+        const fullText = document.body?.innerText ?? '';
+        const postNordMatch = fullText.match(/\bPakke\s+([0-9]{10,})\b/i);
+        if (postNordMatch?.[1]) {
+          return postNordMatch[1].toUpperCase();
+        }
+
         return null;
       });
     } finally {
@@ -305,8 +392,8 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
     }
 
     const trackingNumber = fragtbrevsnummer ?? ttHref;
-    logger.debug(`Danske Fragtmænd fragtbrevsnummer: ${trackingNumber}`);
-    trackingItems.push({ trackingNumber, carrier: 'Danske Fragtmænd', trackingUrl: ttHref });
+    logger.debug(`Fragtlink tracking: ${trackingNumber}`);
+    trackingItems.push({ trackingNumber, carrier: detectCarrierFromUrl(ttHref), trackingUrl: ttHref });
   }
 
   const uniqueTrackingItems: TrackingItem[] = [];

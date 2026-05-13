@@ -72,9 +72,29 @@ export async function postTracking(
       `${payload.carrier} / ${payload.tracking_number}`
     );
     return response.data;
-  } catch (err) {
+  } catch (err: any) {
     logger.error(`Fejl ved opdatering af tracking på ordre #${payload.order_id}:`, err);
-    throw err;
+    // Axios fejl: prøv at udtrække fejlbesked fra response
+    if (err.response && err.response.data) {
+      // Prøv at returnere error-objektet fra API'et
+      return {
+        success: false,
+        error: {
+          code: err.response.data.code || err.response.data.data?.status || 'unknown',
+          message: err.response.data.message || 'Ukendt fejl fra API',
+        },
+        order_id: payload.order_id,
+      } as any;
+    }
+    // Anden fejl (fx netværk)
+    return {
+      success: false,
+      error: {
+        code: 'network_error',
+        message: err.message || 'Netværksfejl',
+      },
+      order_id: payload.order_id,
+    } as any;
   }
 }
 

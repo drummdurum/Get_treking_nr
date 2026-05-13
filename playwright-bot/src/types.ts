@@ -30,12 +30,16 @@ export interface UpdateTrackingPayload {
 export interface UpdateTrackingResponse {
   success: boolean;
   order_id: number;
-  tracking: {
+  tracking?: {
     tracking_provider: string;
     custom_tracking_provider: string;
     custom_tracking_link: string;
     tracking_number: string;
     date_shipped: string;
+  };
+  error?: {
+    code: string;
+    message: string;
   };
 }
 

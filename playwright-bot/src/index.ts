@@ -73,6 +73,14 @@ function getProviderSequence(): ProviderName[] {
   return unique.length > 0 ? unique : ['ao', 'ahlsell'];
 }
 
+function getOrderIdFilter(): number | undefined {
+  const idx = process.argv.indexOf('--order-id');
+  if (idx === -1) return undefined;
+  const raw = process.argv[idx + 1];
+  const parsed = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Main run function
 // ─────────────────────────────────────────────────────────────────────────────
@@ -97,6 +105,19 @@ async function run(sendEmail = false): Promise<void> {
   } catch {
     logger.error('Kunne ikke hente ordrer fra WordPress – afbryder denne kørsel.');
     return;
+  }
+
+  const orderIdFilter = getOrderIdFilter();
+  if (orderIdFilter !== undefined) {
+    orders = orders.filter((o) => o.order_id === orderIdFilter);
+    if (orders.length === 0) {
+      logger.warn(
+        `--order-id ${orderIdFilter} blev angivet, men ordren findes ikke i /orders-missing-tracking.`
+      );
+      logger.warn('Mulige årsager: ordren har allerede tracking, mangler korrekt status, eller er over max checks.');
+      return;
+    }
+    logger.info(`Test-filter aktivt: behandler kun ordre #${orderIdFilter}.`);
   }
 
 
@@ -242,14 +263,28 @@ async function run(sendEmail = false): Promise<void> {
       });
 
       for (const item of uniqueTrackingItems) {
-        await postTracking({
-          order_id:        order.order_id,
-          tracking_number: item.trackingNumber,
-          carrier:         item.carrier,
-        });
+        logger.info(
+          `Opdaterer tracking for ordre #${order.order_id}: carrier='${item.carrier}', tracking='${item.trackingNumber}'`
+        );
+        try {
+          const response = await postTracking({
+            order_id:        order.order_id,
+            tracking_number: item.trackingNumber,
+            carrier:         item.carrier,
+          });
+          if (response && response.success) {
+            logger.info(`Tracking opdateret for ordre #${order.order_id}: ${item.carrier}/${item.trackingNumber}`);
+          } else if (response && response.error && response.error.code === 'duplicate_tracking') {
+            logger.warn(`Tracking-nummer allerede brugt på en anden ordre: ${item.trackingNumber}`);
+          } else {
+            logger.warn(`Uventet svar fra API ved opdatering af tracking: ${JSON.stringify(response)}`);
+          }
+        } catch (err) {
+          logger.error(`Fejl ved opdatering af tracking for ordre #${order.order_id}: ${String(err)}`);
+        }
       }
       logger.info(
-        `${uniqueTrackingItems.length} forsendelse(r) gemt på ordre #${order.order_id}: ` +
+        `${uniqueTrackingItems.length} forsendelse(r) forsøgt gemt på ordre #${order.order_id}: ` +
         uniqueTrackingItems.map(t => `${t.carrier}/${t.trackingNumber}`).join(', ')
       );
       summary.trackingUpdated++;
