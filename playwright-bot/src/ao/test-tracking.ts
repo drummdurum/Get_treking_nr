@@ -15,7 +15,7 @@ import { launchAndLogin, getTrackingForOrder, closeBrowser } from './ao-scraper'
 // Mulighed for at angive ordre-id via miljøvariabel eller CLI-argument
 const argOrder = process.argv.find((a) => /^--order=/.test(a));
 const AO_ORDER_REF = argOrder ? argOrder.split('=')[1] : process.env.AO_ORDER_REF || '33953';
-const EXPECTED_TRACKING = process.env.EXPECTED_TRACKING || '';
+const EXPECTED_TRACKING = process.env.EXPECTED_TRACKING || '00357030308043226422';
 
 async function main() {
   console.log('\n══════════════════════════════════════════');

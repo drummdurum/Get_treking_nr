@@ -350,19 +350,13 @@ if (runOnce) {
     run().catch((err) => logger.error('Fejl ved opstartsrun:', err));
   }
 
-  // ── Planlæg cron-jobs ──────────────────────────────────────────────────
-  // Kl. 07:00 (morgen – sender email), 10:00 og 18:45
-  const schedules: Array<{ cron: string; sendEmail: boolean }> = [
-    { cron: '0 7 * * *',  sendEmail: true  },
-    { cron: '0 10 * * *', sendEmail: false },
-    { cron: '45 18 * * *', sendEmail: false },
-  ];
-  for (const { cron: schedule, sendEmail } of schedules) {
-    logger.info(`Planlægger cron-job: "${schedule}" (timezone: ${config.bot.cronTimezone})${sendEmail ? ' – sender email' : ''}`);
-    cron.schedule(schedule, () => {
-      run(sendEmail).catch((err) => logger.error('Uventet cron-fejl:', err));
-    }, { timezone: config.bot.cronTimezone });
-  }
+  // ── Planlæg ét dagligt cron-job ───────────────────────────────────────
+  logger.info(
+    `Planlægger cron-job: "${config.bot.cronSchedule}" (timezone: ${config.bot.cronTimezone}) – sender email`
+  );
+  cron.schedule(config.bot.cronSchedule, () => {
+    run(true).catch((err) => logger.error('Uventet cron-fejl:', err));
+  }, { timezone: config.bot.cronTimezone });
 
   logger.info('Bot er aktiv og venter på næste kørsel…');
 }
