@@ -31,6 +31,7 @@ import {
   closeBrowser as closeAhlsellBrowser,
 } from './ashley/ashley';
 import { sendMorningReport } from './mailer';
+import { runWordPressFulfillment, type ManualTrackingRow } from './wordpress/update-fulfillment';
 import type { RunSummary, ScrapeResult, UpdatedOrder } from './types';
 
 type ProviderName = 'ao' | 'ahlsell';
@@ -81,6 +82,10 @@ function getOrderIdFilter(): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function shouldRunWordPressFulfillmentAfterIndex(): boolean {
+  return process.env.RUN_WP_FULFILLMENT_AFTER_INDEX === 'true';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Main run function
 // ─────────────────────────────────────────────────────────────────────────────
@@ -88,6 +93,7 @@ function getOrderIdFilter(): number | undefined {
 async function run(sendEmail = false): Promise<void> {
   const startedAt = new Date();
   const updatedOrders: UpdatedOrder[] = [];
+  const useWordPressFulfillment = shouldRunWordPressFulfillmentAfterIndex();
   const summary: RunSummary = {
     ordersFound:     0,
     trackingUpdated: 0,
@@ -262,6 +268,7 @@ async function run(sendEmail = false): Promise<void> {
         return arr.findIndex((x) => `${x.carrier}|${x.trackingNumber}` === key) === index;
       });
 
+      if (!useWordPressFulfillment) {
       for (const item of uniqueTrackingItems) {
         logger.info(
           `Opdaterer tracking for ordre #${order.order_id}: carrier='${item.carrier}', tracking='${item.trackingNumber}'`
@@ -282,6 +289,11 @@ async function run(sendEmail = false): Promise<void> {
         } catch (err) {
           logger.error(`Fejl ved opdatering af tracking for ordre #${order.order_id}: ${String(err)}`);
         }
+      }
+      } else {
+        logger.info(
+          `Gemmer ${uniqueTrackingItems.length} trackingnummer/-numre til browser-opdatering for ordre #${order.order_id}.`
+        );
       }
       logger.info(
         `${uniqueTrackingItems.length} forsendelse(r) forsøgt gemt på ordre #${order.order_id}: ` +
@@ -312,6 +324,20 @@ async function run(sendEmail = false): Promise<void> {
   // ── 6. Send email-rapport (kun ved morgenkørsel) ───────────────────────
   if (sendEmail) {
     await sendMorningReport(summary, updatedOrders);
+  }
+
+  if (useWordPressFulfillment) {
+    if (updatedOrders.length === 0) {
+      logger.info('Ingen fundne trackingnumre at sende til WordPress fulfillment-browserflow.');
+    } else {
+      const fulfillmentRows: ManualTrackingRow[] = updatedOrders.map((order) => ({
+        orderId: order.orderId,
+        carrier: order.carrier,
+        trackingNumber: order.trackingNumber,
+      }));
+      logger.info(`Starter WordPress fulfillment-browserflow med ${fulfillmentRows.length} trackingnummer/-numre fra index.ts.`);
+      await runWordPressFulfillment(fulfillmentRows);
+    }
   }
 }
 

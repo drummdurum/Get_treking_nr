@@ -3,6 +3,9 @@ import path from 'path';
 
 dotenv.config();
 
+const wpBaseUrl = require_env('WP_BASE_URL').replace(/\/$/, '');
+const wpApiKey = process.env.WP_API_KEY ?? process.env.KG_TRACKING_API_KEY ?? '';
+
 function require_env(key: string): string {
   const value = process.env[key];
   if (!value) {
@@ -11,25 +14,22 @@ function require_env(key: string): string {
   return value;
 }
 
-function require_api_key(): string {
-  const wpKey = process.env.WP_API_KEY;
-  const kgKey = process.env.KG_TRACKING_API_KEY;
-  const key = wpKey ?? kgKey;
-  if (!key) {
-    throw new Error('Manglende miljøvariabel: WP_API_KEY eller KG_TRACKING_API_KEY.');
-  }
-  return key;
-}
 
 export const config = {
   wp: {
-    baseUrl:  require_env('WP_BASE_URL').replace(/\/$/, ''),
-    apiKey:   require_api_key(),
+    baseUrl:  wpBaseUrl,
+    apiKey:   wpApiKey,
+  },
+  wpAdmin: {
+    loginUrl:     process.env.WP_ADMIN_LOGIN_URL ?? `${wpBaseUrl}/mellon`,
+    dashboardUrl: process.env.WP_FULFILLMENT_URL ?? `${wpBaseUrl}/wp-admin/admin.php?page=fulfillment-dashboard`,
+    username:     process.env.WP_ADMIN_USERNAME ?? '',
+    password:     process.env.WP_ADMIN_PASSWORD ?? '',
   },
   ao: {
     loginUrl: process.env.AO_LOGIN_URL ?? 'https://www.ao.dk/login',
-    username: require_env('AO_USERNAME'),
-    password: require_env('AO_PASSWORD'),
+    username: process.env.AO_USERNAME ?? '',
+    password: process.env.AO_PASSWORD ?? '',
   },
   ahlsell: {
     baseUrl:  process.env.AHLSELL_BASE_URL ?? 'https://www.ahlsell.dk/da',

@@ -9,4 +9,4 @@ RUN npm ci
 COPY playwright-bot/. .
 RUN npm run build
 
-CMD ["npm", "start"]
+CMD ["sh", "-c", "npm run ${NPM_SCRIPT:-start}"]
