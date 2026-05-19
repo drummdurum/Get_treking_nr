@@ -86,6 +86,10 @@ function shouldRunWordPressFulfillmentAfterIndex(): boolean {
   return process.env.RUN_WP_FULFILLMENT_AFTER_INDEX === 'true';
 }
 
+function shouldRunWordPressFulfillmentBackup(): boolean {
+  return process.env.RUN_WP_FULFILLMENT_BACKUP === 'true';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Main run function
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,7 +97,9 @@ function shouldRunWordPressFulfillmentAfterIndex(): boolean {
 async function run(sendEmail = false): Promise<void> {
   const startedAt = new Date();
   const updatedOrders: UpdatedOrder[] = [];
+  const backupOrders: UpdatedOrder[] = [];
   const useWordPressFulfillment = shouldRunWordPressFulfillmentAfterIndex();
+  const useWordPressFulfillmentBackup = shouldRunWordPressFulfillmentBackup();
   const summary: RunSummary = {
     ordersFound:     0,
     trackingUpdated: 0,
@@ -274,20 +280,27 @@ async function run(sendEmail = false): Promise<void> {
           `Opdaterer tracking for ordre #${order.order_id}: carrier='${item.carrier}', tracking='${item.trackingNumber}'`
         );
         try {
-          const response = await postTracking({
-            order_id:        order.order_id,
-            tracking_number: item.trackingNumber,
-            carrier:         item.carrier,
-          });
+            const response = await postTracking({
+              order_id:        order.order_id,
+              tracking_number: item.trackingNumber,
+              carrier:         item.carrier,
+              status_shipped:  1,
+            });
           if (response && response.success) {
             logger.info(`Tracking opdateret for ordre #${order.order_id}: ${item.carrier}/${item.trackingNumber}`);
           } else if (response && response.error && response.error.code === 'duplicate_tracking') {
             logger.warn(`Tracking-nummer allerede brugt på en anden ordre: ${item.trackingNumber}`);
           } else {
             logger.warn(`Uventet svar fra API ved opdatering af tracking: ${JSON.stringify(response)}`);
+            if (useWordPressFulfillmentBackup) {
+              backupOrders.push({ orderId: order.order_id, carrier: item.carrier, trackingNumber: item.trackingNumber });
+            }
           }
         } catch (err) {
           logger.error(`Fejl ved opdatering af tracking for ordre #${order.order_id}: ${String(err)}`);
+          if (useWordPressFulfillmentBackup) {
+            backupOrders.push({ orderId: order.order_id, carrier: item.carrier, trackingNumber: item.trackingNumber });
+          }
         }
       }
       } else {
@@ -336,6 +349,18 @@ async function run(sendEmail = false): Promise<void> {
         trackingNumber: order.trackingNumber,
       }));
       logger.info(`Starter WordPress fulfillment-browserflow med ${fulfillmentRows.length} trackingnummer/-numre fra index.ts.`);
+      await runWordPressFulfillment(fulfillmentRows);
+    }
+  } else if (useWordPressFulfillmentBackup) {
+    if (backupOrders.length === 0) {
+      logger.info('Ingen fejlede API-opdateringer at sende til WordPress fulfillment-backup.');
+    } else {
+      const fulfillmentRows: ManualTrackingRow[] = backupOrders.map((order) => ({
+        orderId: order.orderId,
+        carrier: order.carrier,
+        trackingNumber: order.trackingNumber,
+      }));
+      logger.info(`Starter WordPress fulfillment-backup med ${fulfillmentRows.length} trackingnummer/-numre.`);
       await runWordPressFulfillment(fulfillmentRows);
     }
   }

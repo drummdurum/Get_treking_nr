@@ -125,7 +125,7 @@ function kg_update_tracking(WP_REST_Request $request) {
     $date_shipped    = sanitize_text_field($request->get_param('date_shipped'));
     $status_shipped  = $request->get_param('status_shipped');
     if ($status_shipped === null || $status_shipped === '') {
-        $status_shipped = 1; // Default: shipped
+        $status_shipped = 1; // Default: shipped/completed, which can trigger payment capture
     }
 
     if (!$order_id || !$tracking_number) {

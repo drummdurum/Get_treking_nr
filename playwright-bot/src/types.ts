@@ -22,6 +22,7 @@ export interface UpdateTrackingPayload {
   order_id: number;
   tracking_number: string;
   carrier: string;
+  status_shipped?: 0 | 1;
 }
 
 /**
