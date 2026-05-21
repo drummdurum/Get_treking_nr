@@ -37,7 +37,7 @@ export const config = {
     password: process.env.AS_PASSWORD ?? process.env.AHLSELL_PASSWORD ?? '',
   },
   bot: {
-    cronSchedule:       process.env.CRON_SCHEDULE        ?? '0 8 * * *',
+    cronSchedule:       process.env.CRON_SCHEDULE        ?? '0 6 * * *',
     cronTimezone:       process.env.CRON_TIMEZONE        ?? process.env.TZ ?? 'Europe/Copenhagen',
     maxRetriesPerOrder: parseInt(process.env.MAX_RETRIES_PER_ORDER ?? '10', 10),
     pageTimeoutMs:      parseInt(process.env.PAGE_TIMEOUT_MS       ?? '30000', 10),
