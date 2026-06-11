@@ -10,7 +10,8 @@
     "dev": "ts-node src/index.ts",
     "run-once": "ts-node src/index.ts --once",
     "debug:wp": "ts-node src/debug-wordpress-auth.ts",
-    "wp:fulfillment": "ts-node src/wordpress/update-fulfillment.ts"
+    "wp:fulfillment": "ts-node src/wordpress/update-fulfillment.ts",
+    "bd:test": "ts-node src/BD_SGDD/test-order.ts"
   },
   "dependencies": {
     "axios": "^1.7.2",

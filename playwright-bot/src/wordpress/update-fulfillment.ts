@@ -14,9 +14,14 @@ import {
   getTrackingForOrder as getAhlsellTrackingForOrder,
   closeBrowser as closeAhlsellBrowser,
 } from '../ashley/ashley';
+import {
+  launchAndLogin as launchBdAndLogin,
+  getTrackingForOrder as getBdTrackingForOrder,
+  closeBrowser as closeBdBrowser,
+} from '../BD_SGDD/bd-scraper';
 import type { ScrapeResult, TrackingItem } from '../types';
 
-type ProviderName = 'ao' | 'ahlsell';
+type ProviderName = 'ao' | 'ahlsell' | 'bd';
 
 interface TrackingProvider {
   name: ProviderName;
@@ -43,6 +48,12 @@ const PROVIDERS: Record<ProviderName, TrackingProvider> = {
     launchAndLogin: launchAhlsellAndLogin,
     getTrackingForOrder: getAhlsellTrackingForOrder,
     closeBrowser: closeAhlsellBrowser,
+  },
+  bd: {
+    name: 'bd',
+    launchAndLogin: launchBdAndLogin,
+    getTrackingForOrder: getBdTrackingForOrder,
+    closeBrowser: closeBdBrowser,
   },
 };
 
@@ -192,13 +203,13 @@ function isBrowserRelatedError(message?: string): boolean {
 }
 
 function getProviderSequence(): ProviderName[] {
-  const raw = (process.env.SCRAPER_PROVIDERS ?? 'ao,ahlsell').toLowerCase();
+  const raw = (process.env.SCRAPER_PROVIDERS ?? 'ao,ahlsell,bd').toLowerCase();
   const requested = raw
     .split(',')
     .map((x) => x.trim())
-    .filter((x): x is ProviderName => x === 'ao' || x === 'ahlsell');
+    .filter((x): x is ProviderName => x === 'ao' || x === 'ahlsell' || x === 'bd');
   const unique = [...new Set(requested)];
-  return unique.length > 0 ? unique : ['ao', 'ahlsell'];
+  return unique.length > 0 ? unique : ['ao', 'ahlsell', 'bd'];
 }
 
 async function loginWordPress(page: Page): Promise<void> {
@@ -416,6 +427,14 @@ export async function runWordPressFulfillment(rowsFromIndex?: ManualTrackingRow[
         (!config.ahlsell.username || !config.ahlsell.password)
       ) {
         logger.warn('Springer Ahlsell over: mangler AHLSELL/AS brugernavn eller kodeord.');
+        continue;
+      }
+
+      if (
+        providerName === 'bd' &&
+        (!config.bd.username || !config.bd.password)
+      ) {
+        logger.warn('Springer BD over: mangler BD_USERNAME/BD_PASSWORD.');
         continue;
       }
 
