@@ -48,6 +48,12 @@ interface TrackingProvider {
   closeBrowser: () => Promise<void>;
 }
 
+interface ProviderTrackingUpdate {
+  orderId: number;
+  carrier: string;
+  trackingNumber: string;
+}
+
 const PROVIDERS: Record<ProviderName, TrackingProvider> = {
   ao: {
     name: 'ao',
@@ -109,6 +115,11 @@ async function run(sendEmail = false): Promise<void> {
   const startedAt = new Date();
   const updatedOrders: UpdatedOrder[] = [];
   const backupOrders: UpdatedOrder[] = [];
+  const trackingUpdatedByProvider: Record<ProviderName, ProviderTrackingUpdate[]> = {
+    ao: [],
+    ahlsell: [],
+    bd: [],
+  };
   const useWordPressFulfillment = shouldRunWordPressFulfillmentAfterIndex();
   const useWordPressFulfillmentBackup = shouldRunWordPressFulfillmentBackup();
   const summary: RunSummary = {
@@ -219,6 +230,7 @@ async function run(sendEmail = false): Promise<void> {
 
     try {
       let finalResult: ScrapeResult | null = null;
+      let finalProviderName: ProviderName | null = null;
       let sawNotReady = false;
       let sawNotFound = false;
       let lastErrorMessage: string | undefined;
@@ -243,6 +255,7 @@ async function run(sendEmail = false): Promise<void> {
 
         if (result.success) {
           finalResult = result;
+          finalProviderName = provider.name;
           logger.info(`Tracking fundet via ${provider.name} for ordre #${order.order_id}`);
           break;
         }
@@ -334,6 +347,13 @@ async function run(sendEmail = false): Promise<void> {
       summary.trackingUpdated++;
       for (const item of uniqueTrackingItems) {
         updatedOrders.push({ orderId: order.order_id, carrier: item.carrier, trackingNumber: item.trackingNumber });
+        if (finalProviderName) {
+          trackingUpdatedByProvider[finalProviderName].push({
+            orderId: order.order_id,
+            carrier: item.carrier,
+            trackingNumber: item.trackingNumber,
+          });
+        }
       }
 
     } catch (err: unknown) {
@@ -351,7 +371,7 @@ async function run(sendEmail = false): Promise<void> {
 
   // ── 5. Log sammendrag ──────────────────────────────────────────────────
   summary.finishedAt = new Date();
-  logSummary(summary);
+  logSummary(summary, trackingUpdatedByProvider);
 
   // ── 6. Send email-rapport (kun ved morgenkørsel) ───────────────────────
   if (sendEmail) {
@@ -389,14 +409,39 @@ async function run(sendEmail = false): Promise<void> {
 // Logging helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function logSummary(summary: RunSummary): void {
+function logSummary(
+  summary: RunSummary,
+  trackingUpdatedByProvider?: Record<ProviderName, ProviderTrackingUpdate[]>,
+): void {
   const durationMs = summary.finishedAt.getTime() - summary.startedAt.getTime();
   logger.info('═══ Kørsel afsluttet ═══');
   logger.info(`  Ordrer fundet:      ${summary.ordersFound}`);
   logger.info(`  Tracking opdateret: ${summary.trackingUpdated}`);
   logger.info(`  Tracking ikke klar: ${summary.trackingNotReady}`);
   logger.info(`  Fejl:               ${summary.errors}`);
+  logProviderTrackingUpdates(trackingUpdatedByProvider);
   logger.info(`  Varighed:           ${(durationMs / 1000).toFixed(1)}s`);
+}
+
+function logProviderTrackingUpdates(
+  trackingUpdatedByProvider?: Record<ProviderName, ProviderTrackingUpdate[]>,
+): void {
+  if (!trackingUpdatedByProvider) return;
+
+  const labels: Record<ProviderName, string> = {
+    ao: 'AO',
+    ahlsell: 'Ahlsell',
+    bd: 'BD',
+  };
+
+  logger.info('  Opdateret pr. leverandor:');
+  for (const providerName of getProviderSequence()) {
+    const updates = trackingUpdatedByProvider[providerName];
+    logger.info(`    ${labels[providerName]} opdateret: ${updates.length}`);
+    for (const update of updates) {
+      logger.info(`      #${update.orderId}: ${update.carrier}/${update.trackingNumber}`);
+    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
