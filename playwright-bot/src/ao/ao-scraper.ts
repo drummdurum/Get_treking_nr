@@ -446,6 +446,7 @@ function detectCarrier(trackingNumber: string): string {
 function detectCarrierFromUrl(url: string): string {
   if (url.includes('gls-group.com'))   return 'GLS';
   if (url.includes('postnord.com'))    return 'PostNord';
+  if (url.includes('trace.fragt.dk'))   return 'Danske Fragtmaend';
   if (url.includes('dao.as'))          return 'DAO';
   if (url.includes('bring.com'))       return 'Bring';
   if (url.includes('dhl.com'))         return 'DHL';
