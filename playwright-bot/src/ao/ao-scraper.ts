@@ -15,6 +15,7 @@
 import { Browser, BrowserContext, Page, chromium } from 'playwright';
 import { config } from '../config';
 import { logger } from '../logger';
+import { dedupeTrackingItems, detectCarrierFromTrackingNumber, normalizeCarrier } from '../tracking-utils';
 import type { ScrapeResult, TrackingItem } from '../types';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -396,14 +397,7 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
     trackingItems.push({ trackingNumber, carrier: detectCarrierFromUrl(ttHref), trackingUrl: ttHref });
   }
 
-  const uniqueTrackingItems: TrackingItem[] = [];
-  const seenTrackingKeys = new Set<string>();
-  for (const item of trackingItems) {
-    const key = `${item.carrier}|${item.trackingNumber}`;
-    if (seenTrackingKeys.has(key)) continue;
-    seenTrackingKeys.add(key);
-    uniqueTrackingItems.push(item);
-  }
+  const uniqueTrackingItems: TrackingItem[] = dedupeTrackingItems(trackingItems);
 
   logger.debug(
     `Fandt ${uniqueTrackingItems.length} unik(ke) forsendelse(r) på ordre #${aoReference}: ${uniqueTrackingItems
@@ -430,27 +424,17 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
  * Udvid listen efter behov.
  */
 function detectCarrier(trackingNumber: string): string {
-  // GLS DK: typisk 14-cifret, starter med 00370
-  if (/^00370\d{9,}$/.test(trackingNumber)) return 'GLS';
-
-  // PostNord DK: starter med RE / RR / PQ eller lignende
-  if (/^[A-Z]{2}\d{9}DK$/.test(trackingNumber)) return 'PostNord';
-
-  // DAO: 10-18 cifre
-  if (/^\d{10,18}$/.test(trackingNumber)) return 'DAO';
-
-  // Fallback
-  return 'GLS';
+  return detectCarrierFromTrackingNumber(trackingNumber);
 }
 
 function detectCarrierFromUrl(url: string): string {
   if (url.includes('gls-group.com'))   return 'GLS';
   if (url.includes('postnord.com'))    return 'PostNord';
-  if (url.includes('trace.fragt.dk'))   return 'Danske Fragtmaend';
+  if (url.includes('trace.fragt.dk'))   return 'Danske Fragtmænd';
   if (url.includes('dao.as'))          return 'DAO';
   if (url.includes('bring.com'))       return 'Bring';
   if (url.includes('dhl.com'))         return 'DHL';
-  return 'Ukendt';
+  return normalizeCarrier(detectCarrierFromTrackingNumber(url));
 }
 
 /** Træk trackingnummer ud af et tracking-URL. */

@@ -1,54 +1,49 @@
-/**
- * test-tracking.ts – tester AO ordresøgning + Track & Trace opslag.
- *
- * Kørsel (fra playwright-bot/):
- *   npx ts-node src/test-tracking.ts
- *
- * Ændre AO_ORDER_REF og EXPECTED_TRACKING nedenfor til det ordre du vil teste.
- */
-
 import dotenv from 'dotenv';
 dotenv.config();
 
-import { launchAndLogin, getTrackingForOrder, closeBrowser } from './ao-scraper'; // ao-scraper er i samme mappe
+import { closeBrowser, getTrackingForOrder, launchAndLogin } from './ao-scraper';
 
-// Mulighed for at angive ordre-id via miljøvariabel eller CLI-argument
 const argOrder = process.argv.find((a) => /^--order=/.test(a));
+const argExpected = process.argv.find((a) => /^--expected=/.test(a));
+
 const AO_ORDER_REF = argOrder ? argOrder.split('=')[1] : process.env.AO_ORDER_REF || '33953';
-const EXPECTED_TRACKING = process.env.EXPECTED_TRACKING || '00357030308043226422';
+const EXPECTED_TRACKING = argExpected ? argExpected.split('=')[1] : process.env.EXPECTED_TRACKING;
 
 async function main() {
-  console.log('\n══════════════════════════════════════════');
-  console.log(' AO Tracking test');
-  console.log('══════════════════════════════════════════');
-  console.log(` Ordrenummer:      ${AO_ORDER_REF}`);
-  console.log(` Forventet T&T:    ${EXPECTED_TRACKING}`);
-  console.log('══════════════════════════════════════════\n');
+  console.log('\nAO Tracking test');
+  console.log('='.repeat(42));
+  console.log(`Ordrenummer:   ${AO_ORDER_REF}`);
+  console.log(`Forventet T&T: ${EXPECTED_TRACKING ?? '(ikke angivet)'}`);
+  console.log('='.repeat(42));
 
   try {
-    console.log('▶ Logger ind på AO…');
+    console.log('\nLogger ind paa AO...');
     await launchAndLogin();
-    console.log('✓ Login OK\n');
+    console.log('Login OK');
 
-    console.log(`▶ Slår op: ${AO_ORDER_REF}…`);
+    console.log(`\nSlaar op: ${AO_ORDER_REF}...`);
     const result = await getTrackingForOrder(AO_ORDER_REF);
 
-    console.log('\n── Resultat ──────────────────────────────');
+    console.log('\nResultat');
+    console.log('-'.repeat(42));
     console.log(JSON.stringify(result, null, 2));
-    console.log('──────────────────────────────────────────');
+    console.log('-'.repeat(42));
 
     if (result.success) {
-      const match = result.trackingNumber === EXPECTED_TRACKING;
-      console.log(`\n✓ Tracking fundet:  ${result.trackingNumber}  (${result.carrier})`);
-      console.log(match
-        ? `✓ MATCH – tracker stemmer overens med forventet ${EXPECTED_TRACKING}`
-        : `✗ MISMATCH – forventede ${EXPECTED_TRACKING}, fik ${result.trackingNumber}`
-      );
+      const match = EXPECTED_TRACKING ? result.trackingNumber === EXPECTED_TRACKING : undefined;
+      console.log(`\nOK Tracking fundet: ${result.trackingNumber} (${result.carrier})`);
+      if (match !== undefined) {
+        console.log(match
+          ? `OK MATCH - tracker stemmer overens med forventet ${EXPECTED_TRACKING}`
+          : `FEJL MISMATCH - forventede ${EXPECTED_TRACKING}, fik ${result.trackingNumber}`
+        );
+      }
     } else {
-      console.error(`\n✗ Ingen tracking: [${result.reason}] ${result.message}`);
+      console.error(`\nIngen tracking: [${result.reason}] ${result.message}`);
     }
   } catch (err) {
-    console.error('\n✗ FEJL:', err);
+    console.error('\nFEJL:', err);
+    process.exitCode = 1;
   } finally {
     await closeBrowser();
   }

@@ -37,6 +37,7 @@ import {
 } from './BD_SGDD/bd-scraper';
 import { sendMorningReport } from './mailer';
 import { runWordPressFulfillment, type ManualTrackingRow } from './wordpress/update-fulfillment';
+import { dedupeTrackingItems } from './tracking-utils';
 import type { RunSummary, ScrapeResult, UpdatedOrder } from './types';
 
 type ProviderName = 'ao' | 'ahlsell' | 'bd';
@@ -285,7 +286,7 @@ async function run(sendEmail = false): Promise<void> {
 
         if (sawNotFound) {
           logger.warn(
-            `Reference ${order.ao_reference} ikke fundet hos nogen provider. ` +
+            `Reference ${aoRef} ikke fundet hos nogen provider. ` +
             `Tjek at referencenummeret er korrekt på ordre #${order.order_id}.`
           );
           await markOrderChecked(order.order_id);
@@ -301,10 +302,7 @@ async function run(sendEmail = false): Promise<void> {
       }
 
       // Post kun unikke forsendelser til WooCommerce (undgår dubletter)
-      const uniqueTrackingItems = finalResult.trackingItems.filter((item, index, arr) => {
-        const key = `${item.carrier}|${item.trackingNumber}`;
-        return arr.findIndex((x) => `${x.carrier}|${x.trackingNumber}` === key) === index;
-      });
+      const uniqueTrackingItems = dedupeTrackingItems(finalResult.trackingItems);
 
       if (!useWordPressFulfillment) {
       for (const item of uniqueTrackingItems) {

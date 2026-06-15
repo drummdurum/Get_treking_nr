@@ -11,7 +11,8 @@
     "run-once": "ts-node src/index.ts --once",
     "debug:wp": "ts-node src/debug-wordpress-auth.ts",
     "wp:fulfillment": "ts-node src/wordpress/update-fulfillment.ts",
-    "bd:test": "ts-node src/BD_SGDD/test-order.ts"
+    "bd:test": "ts-node src/BD_SGDD/test-order.ts",
+    "provider:test": "ts-node src/test-provider.ts"
   },
   "dependencies": {
     "axios": "^1.7.2",

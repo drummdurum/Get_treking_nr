@@ -6,6 +6,7 @@
 import { Browser, BrowserContext, chromium } from 'playwright';
 import { config } from '../config';
 import { logger } from '../logger';
+import { dedupeTrackingItems, normalizeCarrier } from '../tracking-utils';
 import type { ScrapeResult, TrackingItem } from '../types';
 
 let browser: Browser | null = null;
@@ -217,7 +218,7 @@ export async function getTrackingForOrder(reference: string): Promise<ScrapeResu
         });
 
         if (parsed.trackingNumber) {
-          const carrier = parsed.carrier ?? 'Danske Fragtmaend';
+          const carrier = normalizeCarrier(parsed.carrier ?? 'Danske Fragtmænd');
           const trackingUrl = `https://tracking.postnord.com/tracking/#/search?id=${parsed.trackingNumber}`;
           logger.info(`[Ahlsell] Tracking fundet for ${reference}: ${parsed.trackingNumber}`);
           trackingItems.push({
@@ -231,10 +232,7 @@ export async function getTrackingForOrder(reference: string): Promise<ScrapeResu
       }
     }
 
-    const uniqueTrackingItems = trackingItems.filter((item, index, arr) => {
-      const key = `${item.carrier}|${item.trackingNumber}`;
-      return arr.findIndex((x) => `${x.carrier}|${x.trackingNumber}` === key) === index;
-    });
+    const uniqueTrackingItems = dedupeTrackingItems(trackingItems);
 
     if (uniqueTrackingItems.length > 0) {
       logger.info(`[Ahlsell] Returnerer ${uniqueTrackingItems.length} unik(ke) trackingnummer(e) for ${reference}.`);

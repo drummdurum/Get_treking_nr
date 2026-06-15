@@ -1,10 +1,14 @@
-import { Browser, BrowserContext, Page, chromium } from 'playwright';
+import { Browser, BrowserContext, Locator, Page, chromium } from 'playwright';
 import { config } from '../config';
 import { logger } from '../logger';
+import { dedupeTrackingItems } from '../tracking-utils';
 import type { ScrapeResult, TrackingItem } from '../types';
 
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
+
+const BD_SEARCH_ROW_TIMEOUT_MS = 12_000;
+const BD_OPEN_ORDER_TIMEOUT_MS = 12_000;
 
 export async function launchAndLogin(): Promise<void> {
   logger.info('[BD] Starter browser...');
@@ -36,9 +40,9 @@ export async function getTrackingForOrder(reference: string): Promise<ScrapeResu
 
   try {
     await gotoOrdersPage(page);
-    await searchByReference(page, reference);
+    await searchByReferenceFast(page, reference);
 
-    const opened = await openOrderFromResults(page, reference);
+    const opened = await openOrderFromResultsFast(page, reference);
     if (!opened) {
       await page.screenshot({ path: `logs/bd-order-${reference}-not-found.png`, fullPage: true }).catch(() => {});
       logger.info(`[BD] Kunne ikke finde ordre med reference ${reference}.`);
@@ -71,10 +75,7 @@ export async function getTrackingForOrder(reference: string): Promise<ScrapeResu
       };
     }
 
-    const uniqueTrackingItems = trackingItems.filter((item, index, arr) => {
-      const key = `${item.carrier}|${item.trackingNumber}`;
-      return arr.findIndex((x) => `${x.carrier}|${x.trackingNumber}` === key) === index;
-    });
+    const uniqueTrackingItems = dedupeTrackingItems(trackingItems);
 
     const first = uniqueTrackingItems[0];
     logger.info(`[BD] Returnerer ${uniqueTrackingItems.length} trackingnummer/-numre for ${reference}.`);
@@ -217,6 +218,83 @@ async function waitForOrdersUi(page: Page, timeout: number): Promise<boolean> {
     }, { timeout })
     .then(() => true)
     .catch(() => false);
+}
+
+async function searchByReferenceFast(page: Page, reference: string): Promise<void> {
+  logger.debug(`[BD] Soeger efter reference: ${reference}`);
+
+  await clickReferenceFilter(page);
+
+  const startedAt = Date.now();
+  const searchValue = reference.replace(/^#/, '');
+  const searchInput = await findSearchInput(page);
+  await searchInput.fill(searchValue);
+  await submitSearch(page, searchInput);
+
+  const foundWithoutHash = await waitForReferenceRow(page, reference, BD_SEARCH_ROW_TIMEOUT_MS);
+  if (foundWithoutHash || reference.startsWith('#')) {
+    logger.info(`[BD] Reference ${reference} fundet i soegeresultat efter ${elapsedSeconds(startedAt)}s.`);
+    return;
+  }
+
+  const freshSearchInput = await findSearchInput(page);
+  await freshSearchInput.fill(`#${searchValue}`);
+  await submitSearch(page, freshSearchInput);
+
+  const foundWithHash = await waitForReferenceRow(page, reference, BD_SEARCH_ROW_TIMEOUT_MS);
+  if (foundWithHash) {
+    logger.info(`[BD] Reference ${reference} fundet med #-soegning efter ${elapsedSeconds(startedAt)}s.`);
+  }
+}
+
+async function submitSearch(page: Page, searchInput: Locator): Promise<void> {
+  await searchInput.press('Enter').catch(async () => {
+    await page.locator('button:has-text("Sog"), button:has-text("Search"), button[type="submit"]').first().click();
+  });
+}
+
+async function openOrderFromResultsFast(page: Page, reference: string): Promise<boolean> {
+  const row = page.locator('tbody tr').filter({ hasText: new RegExp(`#?${escapeRegExp(reference)}`) }).first();
+  let rowVisible = await row.isVisible({ timeout: 3_000 }).catch(() => false);
+  if (!rowVisible) {
+    await waitForReferenceRow(page, reference, 5_000);
+    rowVisible = await row.isVisible({ timeout: 1_000 }).catch(() => false);
+  }
+  if (!rowVisible) return false;
+
+  const beforeUrl = page.url();
+  const orderNumber = ((await row.locator('td').first().textContent({ timeout: 1_000 }).catch(() => null)) ?? '').trim();
+  const href = await row.locator('a[href]').first().getAttribute('href', { timeout: 500 }).catch(() => null);
+  const startedAt = Date.now();
+  logger.info(`[BD] Aabner ordre ${orderNumber || reference} fra soegeresultat.`);
+
+  if (href) {
+    await row.locator('a[href]').first().click();
+  } else {
+    await row.scrollIntoViewIfNeeded().catch(() => {});
+    const firstCell = row.locator('td').first();
+
+    await firstCell.click({ timeout: 5_000 }).catch(async () => {
+      await row.click({ force: true, timeout: 5_000 });
+    });
+
+    if (!(await waitForOrderDetails(page, beforeUrl, orderNumber, 2_500))) {
+      await firstCell.dblclick({ force: true, timeout: 5_000 }).catch(() => undefined);
+    }
+
+    if (!(await waitForOrderDetails(page, beforeUrl, orderNumber, 2_500))) {
+      await row.evaluate((el) => (el as HTMLElement).click()).catch(() => undefined);
+    }
+  }
+
+  await page.waitForLoadState('domcontentloaded').catch(() => {});
+  const opened = await waitForOrderDetails(page, beforeUrl, orderNumber, BD_OPEN_ORDER_TIMEOUT_MS);
+  logger.info(`[BD] Ordredetalje ${opened ? 'aabnet' : 'ikke aabnet'} efter ${elapsedSeconds(startedAt)}s.`);
+  return opened;
+}
+
+function elapsedSeconds(startedAt: number): string {
+  return ((Date.now() - startedAt) / 1000).toFixed(1);
 }
 
 async function searchByReference(page: Page, reference: string): Promise<void> {
@@ -368,8 +446,6 @@ async function waitForOrderDetails(page: Page, beforeUrl: string, orderNumber: s
 }
 
 async function waitForTrackAndTraceText(page: Page): Promise<boolean> {
-  await page.waitForTimeout(16_000);
-
   return await page
     .waitForFunction(() => {
       const text = document.body?.innerText ?? '';
@@ -459,10 +535,11 @@ async function extractTrackingItems(page: Page): Promise<TrackingItem[]> {
       if (haystack.includes('dao')) return 'DAO';
       if (haystack.includes('bring')) return 'Bring';
       if (haystack.includes('dhl')) return 'DHL';
-      if (haystack.includes('fragt')) return 'Danske Fragtmaend';
-      if (/^FM\d{6,}$/i.test(trackingNumber)) return 'Danske Fragtmaend';
+      if (haystack.includes('fragt')) return 'Danske Fragtmænd';
+      if (/^GM\d{6,}$/i.test(trackingNumber) || /^FM\d{6,}$/i.test(trackingNumber)) return 'Danske Fragtmænd';
       if (/^00370\d{9,}$/.test(trackingNumber)) return 'GLS';
       if (/^[A-Z]{2}\d{9}DK$/i.test(trackingNumber)) return 'PostNord';
+      if (/^0{0,3}73\d{15,}$/.test(trackingNumber)) return 'PostNord';
       return 'Ukendt';
     }
   });
