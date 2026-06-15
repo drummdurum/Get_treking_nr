@@ -6,6 +6,10 @@ export function normalizeTrackingNumber(value: string): string {
   return value.replace(/\s+/g, '').trim().toUpperCase();
 }
 
+export function hasTrackingNumberLetterPrefix(value: string): boolean {
+  return /^[A-Z]{2}/.test(normalizeTrackingNumber(value));
+}
+
 export function trackingNumberKey(value: string): string {
   const normalized = normalizeTrackingNumber(value);
   return /^\d+$/.test(normalized) ? normalized.replace(/^0+/, '') : normalized;
@@ -22,11 +26,14 @@ export function normalizeCarrier(value: string | null | undefined): string {
     .replace(/æ/g, 'ae')
     .replace(/ø/g, 'oe')
     .replace(/å/g, 'aa')
+    .replace(/ã¦/g, 'ae')
+    .replace(/ã¸/g, 'oe')
+    .replace(/ã¥/g, 'aa')
     .replace(/\s+/g, ' ');
 
   if (!key) return UNKNOWN_CARRIER;
   if (key.includes('postnord') || key.includes('post nord')) return 'PostNord';
-  if (key.includes('danske fragt') || key.includes('fragtmaend') || key.includes('fragtmand')) return 'Danske Fragtmænd';
+  if (key.includes('danske fragt') || key.includes('fragtmaend') || key.includes('fragtmand')) return 'Danske Fragtmaend';
   if (key.includes('gls')) return 'GLS';
   if (key.includes('dao')) return 'DAO';
   if (key.includes('bring')) return 'Bring';
@@ -37,7 +44,7 @@ export function normalizeCarrier(value: string | null | undefined): string {
 export function detectCarrierFromTrackingNumber(trackingNumber: string): string {
   const normalized = normalizeTrackingNumber(trackingNumber);
 
-  if (/^GM\d{6,}$/i.test(normalized) || /^FM\d{6,}$/i.test(normalized)) return 'Danske Fragtmænd';
+  if (/^(GM|FM|ER)\d{6,}$/i.test(normalized)) return 'Danske Fragtmaend';
   if (/^00370\d{9,}$/.test(normalized)) return 'GLS';
   if (/^[A-Z]{2}\d{9}DK$/i.test(normalized)) return 'PostNord';
   if (/^0{0,3}73\d{15,}$/.test(normalized)) return 'PostNord';

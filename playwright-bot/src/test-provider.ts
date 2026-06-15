@@ -16,7 +16,7 @@ import {
   getTrackingForOrder as getBdTrackingForOrder,
   launchAndLogin as launchBdAndLogin,
 } from './BD_SGDD/bd-scraper';
-import { trackingNumbersEqual } from './tracking-utils';
+import { hasTrackingNumberLetterPrefix, trackingNumbersEqual } from './tracking-utils';
 import type { ScrapeResult } from './types';
 
 type ProviderName = 'ao' | 'ahlsell' | 'bd';
@@ -71,10 +71,15 @@ function printResult(providerName: ProviderName, reference: string, expected: st
   if (result.success) {
     console.log(`Carrier:   ${result.carrier}`);
     console.log(`Tracking:  ${result.trackingNumber}`);
+    console.log(`WP valid:  ${hasTrackingNumberLetterPrefix(result.trackingNumber) ? 'JA' : 'NEJ'}`);
     console.log(`URL:       ${result.trackingUrl ?? '(ingen)'}`);
     console.log(`Items:     ${result.trackingItems.length}`);
     for (const item of result.trackingItems) {
-      console.log(`  - ${item.carrier} / ${item.trackingNumber} / ${item.trackingUrl ?? '(ingen URL)'}`);
+      console.log(
+        `  - ${item.carrier} / ${item.trackingNumber} / ` +
+        `WP valid: ${hasTrackingNumberLetterPrefix(item.trackingNumber) ? 'JA' : 'NEJ'} / ` +
+        `${item.trackingUrl ?? '(ingen URL)'}`
+      );
     }
 
     if (expected) {

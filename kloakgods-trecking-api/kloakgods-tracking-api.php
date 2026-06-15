@@ -55,6 +55,10 @@ function kg_normalize_tracking_number($tracking_number) {
     return strtoupper(preg_replace('/\s+/', '', (string) $tracking_number));
 }
 
+function kg_has_tracking_letter_prefix($tracking_number) {
+    return preg_match('/^[A-Z]{2}/', kg_normalize_tracking_number($tracking_number)) === 1;
+}
+
 function kg_tracking_compare_key($tracking_number) {
     $tracking_number = kg_normalize_tracking_number($tracking_number);
     if (preg_match('/^\d+$/', $tracking_number)) {
@@ -249,6 +253,20 @@ function kg_update_tracking(WP_REST_Request $request) {
             'carrier'         => $carrier,
         ]);
         return new WP_Error('missing_data', 'Missing order_id or tracking_number', ['status' => 400]);
+    }
+
+    if (!kg_has_tracking_letter_prefix($tracking_number)) {
+        kg_log('warning', 'Update tracking rejected: tracking number does not start with two letters.', [
+            'order_id'        => $order_id,
+            'tracking_number' => $tracking_number,
+            'carrier'         => $carrier,
+        ]);
+
+        return new WP_Error(
+            'invalid_tracking_number',
+            'Tracking number must start with two letters.',
+            ['status' => 400, 'tracking_number' => $tracking_number]
+        );
     }
 
     $order = wc_get_order($order_id);

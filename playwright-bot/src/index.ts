@@ -37,7 +37,7 @@ import {
 } from './BD_SGDD/bd-scraper';
 import { sendMorningReport } from './mailer';
 import { runWordPressFulfillment, type ManualTrackingRow } from './wordpress/update-fulfillment';
-import { dedupeTrackingItems } from './tracking-utils';
+import { dedupeTrackingItems, hasTrackingNumberLetterPrefix } from './tracking-utils';
 import type { RunSummary, ScrapeResult, UpdatedOrder } from './types';
 
 type ProviderName = 'ao' | 'ahlsell' | 'bd';
@@ -303,9 +303,20 @@ async function run(sendEmail = false): Promise<void> {
 
       // Post kun unikke forsendelser til WooCommerce (undgår dubletter)
       const uniqueTrackingItems = dedupeTrackingItems(finalResult.trackingItems);
+      const validTrackingItems = uniqueTrackingItems.filter((item) => hasTrackingNumberLetterPrefix(item.trackingNumber));
+
+      if (validTrackingItems.length === 0) {
+        logger.warn(
+          `Ordre #${order.order_id}: fandt kun ugyldige trackingnumre uden 2 bogstaver foran: ` +
+          uniqueTrackingItems.map((t) => `${t.carrier}/${t.trackingNumber}`).join(', ')
+        );
+        await markOrderChecked(order.order_id);
+        summary.trackingNotReady++;
+        continue;
+      }
 
       if (!useWordPressFulfillment) {
-      for (const item of uniqueTrackingItems) {
+      for (const item of validTrackingItems) {
         logger.info(
           `Opdaterer tracking for ordre #${order.order_id}: carrier='${item.carrier}', tracking='${item.trackingNumber}'`
         );
@@ -335,15 +346,15 @@ async function run(sendEmail = false): Promise<void> {
       }
       } else {
         logger.info(
-          `Gemmer ${uniqueTrackingItems.length} trackingnummer/-numre til browser-opdatering for ordre #${order.order_id}.`
+          `Gemmer ${validTrackingItems.length} trackingnummer/-numre til browser-opdatering for ordre #${order.order_id}.`
         );
       }
       logger.info(
-        `${uniqueTrackingItems.length} forsendelse(r) forsøgt gemt på ordre #${order.order_id}: ` +
-        uniqueTrackingItems.map(t => `${t.carrier}/${t.trackingNumber}`).join(', ')
+        `${validTrackingItems.length} forsendelse(r) forsøgt gemt på ordre #${order.order_id}: ` +
+        validTrackingItems.map(t => `${t.carrier}/${t.trackingNumber}`).join(', ')
       );
       summary.trackingUpdated++;
-      for (const item of uniqueTrackingItems) {
+      for (const item of validTrackingItems) {
         updatedOrders.push({ orderId: order.order_id, carrier: item.carrier, trackingNumber: item.trackingNumber });
         if (finalProviderName) {
           trackingUpdatedByProvider[finalProviderName].push({
