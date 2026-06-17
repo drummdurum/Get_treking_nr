@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Kloakgods Tracking API
  * Description: Custom REST API for tracking automation.
- * Version: 1.2.0
+ * Version: 1.2.1
  */
 
 if (!defined('ABSPATH')) {
@@ -303,6 +303,15 @@ function kg_update_tracking(WP_REST_Request $request) {
         ]);
     }
 
+    kg_log('info', 'Calling AST insert tracking.', [
+        'order_id'        => $order_id,
+        'tracking_number' => $tracking_number,
+        'tracking_key'    => kg_tracking_compare_key($tracking_number),
+        'carrier'         => $carrier,
+        'date_shipped'    => $date_shipped ?: date('Y-m-d'),
+        'status_shipped'  => $status_shipped,
+    ]);
+
     try {
         $ast_result = ast_insert_tracking_number(
             $order_id,
@@ -320,6 +329,24 @@ function kg_update_tracking(WP_REST_Request $request) {
         ]);
 
         return new WP_Error('ast_insert_failed', 'AST insert tracking failed: ' . $e->getMessage(), ['status' => 500]);
+    }
+
+    if (is_wp_error($ast_result)) {
+        kg_log('error', 'AST insert tracking returned WP_Error.', [
+            'order_id'        => $order_id,
+            'tracking_number' => $tracking_number,
+            'tracking_key'    => kg_tracking_compare_key($tracking_number),
+            'carrier'         => $carrier,
+            'error_code'      => $ast_result->get_error_code(),
+            'error_message'   => $ast_result->get_error_message(),
+            'error_data'      => $ast_result->get_error_data(),
+        ]);
+
+        return new WP_Error(
+            'ast_insert_failed',
+            'AST insert tracking failed: ' . $ast_result->get_error_message(),
+            ['status' => 500, 'ast_error_code' => $ast_result->get_error_code()]
+        );
     }
 
     $order->add_order_note(sprintf(

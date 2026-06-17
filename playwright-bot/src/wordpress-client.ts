@@ -8,7 +8,7 @@ import type {
 } from './types';
 
 // ---------------------------------------------------------------------------
-// Axios instance – all requests go through this with the API key header
+// Axios instance - all requests go through this with the API key header
 // ---------------------------------------------------------------------------
 
 const http: AxiosInstance = axios.create({
@@ -68,30 +68,54 @@ export async function postTracking(
       payload
     );
     logger.info(
-      `Tracking gemt på ordre #${payload.order_id}: ` +
+      `Tracking gemt paa ordre #${payload.order_id}: ` +
       `${payload.carrier} / ${payload.tracking_number}`
     );
     return response.data;
   } catch (err: any) {
-    logger.error(`Fejl ved opdatering af tracking på ordre #${payload.order_id}:`, err);
-    // Axios fejl: prøv at udtrække fejlbesked fra response
-    if (err.response && err.response.data) {
-      // Prøv at returnere error-objektet fra API'et
+    if (axios.isAxiosError(err)) {
+      const responseData = err.response?.data;
+      logger.error(`Fejl ved opdatering af tracking paa ordre #${payload.order_id}: WordPress API svarede med fejl`, {
+        order_id: payload.order_id,
+        carrier: payload.carrier,
+        tracking_number: payload.tracking_number,
+        status: err.response?.status,
+        statusText: err.response?.statusText,
+        response: responseData,
+        code: err.code,
+        message: err.message,
+      });
+
+      if (responseData) {
+        const responseObject = typeof responseData === 'object' ? responseData as any : {};
+        const message = responseObject.message || (typeof responseData === 'string' ? responseData : 'Ukendt fejl fra API');
+
+        return {
+          success: false,
+          error: {
+            code: responseObject.code || responseObject.data?.status || err.response?.status || 'unknown',
+            message,
+          },
+          order_id: payload.order_id,
+        } as any;
+      }
+
       return {
         success: false,
         error: {
-          code: err.response.data.code || err.response.data.data?.status || 'unknown',
-          message: err.response.data.message || 'Ukendt fejl fra API',
+          code: err.code || 'wordpress_api_error',
+          message: err.message || 'Ukendt fejl fra WordPress API',
         },
         order_id: payload.order_id,
       } as any;
     }
-    // Anden fejl (fx netværk)
+
+    logger.error(`Fejl ved opdatering af tracking paa ordre #${payload.order_id}:`, err);
     return {
       success: false,
       error: {
         code: 'network_error',
-        message: err.message || 'Netværksfejl',
+        message: err.message || 'Netvaerksfejl',
       },
       order_id: payload.order_id,
     } as any;
@@ -108,6 +132,6 @@ export async function markOrderChecked(orderId: number): Promise<void> {
     logger.debug(`Ordre #${orderId} markeret som tjekket (ingen tracking endnu).`);
   } catch (err) {
     logger.warn(`Kunne ikke markere ordre #${orderId} som tjekket:`, err);
-    // Non-critical – don't rethrow
+    // Non-critical - don't rethrow
   }
 }
