@@ -24,6 +24,7 @@ import type { ScrapeResult, TrackingItem } from '../types';
 
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
+let aoPage: Page | null = null;
 let isLoggedIn = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -51,7 +52,9 @@ export async function launchAndLogin(): Promise<void> {
     timezoneId: 'Europe/Copenhagen',
   });
 
-  await login();
+  aoPage = await context.newPage();
+  setupAoPage(aoPage);
+  await login(aoPage);
 }
 
 /**
@@ -59,16 +62,20 @@ export async function launchAndLogin(): Promise<void> {
  */
 export async function getTrackingForOrder(aoReference: string): Promise<ScrapeResult> {
   if (!context || !browser?.isConnected()) {
-    return { success: false, reason: 'error', message: 'Browser ikke tilgængelig eller lukket uventet.' };
+    return { success: false, reason: 'error', message: 'Browser ikke tilgaengelig eller lukket uventet.' };
   }
 
-  let page;
+  let page: Page;
   try {
-    page = await context.newPage();
+    if (!aoPage || aoPage.isClosed()) {
+      aoPage = await context.newPage();
+      setupAoPage(aoPage);
+      await login(aoPage);
+    }
+    page = aoPage;
   } catch {
-    return { success: false, reason: 'error', message: 'Kunne ikke åbne ny side – browser lukket uventet.' };
+    return { success: false, reason: 'error', message: 'Kunne ikke aabne AO-side - browser lukket uventet.' };
   }
-  page.setDefaultTimeout(config.bot.pageTimeoutMs);
 
   try {
     return await lookupTracking(page, aoReference);
@@ -76,11 +83,23 @@ export async function getTrackingForOrder(aoReference: string): Promise<ScrapeRe
     const message = err instanceof Error ? err.message : String(err);
     logger.error(`Uventet fejl under opslag af ${aoReference}: ${message}`);
     return { success: false, reason: 'error', message };
-  } finally {
-    await page.close();
   }
 }
 
+function setupAoPage(page: Page): void {
+  page.setDefaultTimeout(config.bot.pageTimeoutMs);
+  page.on('requestfailed', (request) => {
+    if (!['document', 'xhr', 'fetch'].includes(request.resourceType())) return;
+    const failure = request.failure();
+    logger.warn(`[AO] Request failed: ${request.method()} ${request.url()} - ${failure?.errorText ?? 'unknown error'}`);
+  });
+  page.on('response', (response) => {
+    const request = response.request();
+    if (!['xhr', 'fetch'].includes(request.resourceType())) return;
+    if (response.status() < 400) return;
+    logger.warn(`[AO] API response ${response.status()}: ${request.method()} ${response.url()}`);
+  });
+}
 /**
  * Close the browser. Call once at the end of a bot run.
  */
@@ -89,6 +108,7 @@ export async function closeBrowser(): Promise<void> {
     await browser.close();
     browser = null;
     context = null;
+    aoPage = null;
     isLoggedIn = false;
     logger.info('Browser lukket.');
   }
@@ -98,10 +118,10 @@ export async function closeBrowser(): Promise<void> {
 // Login
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function login(): Promise<void> {
+async function login(existingPage?: Page): Promise<void> {
   if (!context) throw new Error('Browser context ikke initialiseret.');
 
-  const page = await context.newPage();
+  const page = existingPage ?? await context.newPage();
   page.setDefaultTimeout(config.bot.pageTimeoutMs);
 
   try {
@@ -131,11 +151,12 @@ async function login(): Promise<void> {
     await page.locator('#password:visible').fill(config.ao.password);
     await page.locator('button[type="submit"]:visible:has-text("Log ind")').click();
 
-    // ── Vent på at vi er logget ind: "Mit overblik"-knappen dukker op ─────
-    await page.waitForSelector('.mit-overblik, a[href*="/mit-overblik"]', {
-      state: 'attached',
-      timeout: config.bot.pageTimeoutMs,
-    });
+    // "Mit overblik" kan findes i DOMen foer sessionen er aktiv. Vent paa
+    // kontoteksten, saa vi ikke gaar videre mens AO stadig svarer 401.
+    await page.waitForFunction((username) => {
+      const accountText = (document.querySelector('a[href="/mit-overblik"] .account-name')?.textContent ?? '').trim().toLowerCase();
+      return accountText.length > 0 && accountText.includes(String(username).toLowerCase());
+    }, config.ao.username, { timeout: config.bot.pageTimeoutMs });
 
     isLoggedIn = true;
     logger.info('Login lykkedes.');
@@ -145,7 +166,9 @@ async function login(): Promise<void> {
     await page.screenshot({ path: 'logs/login-error.png' }).catch(() => {});
     throw new Error(`AO login fejlede: ${message}`);
   } finally {
-    await page.close();
+    if (!existingPage) {
+      await page.close();
+    }
   }
 }
 
@@ -155,6 +178,135 @@ async function login(): Promise<void> {
 
 // Statuser der betyder ordren endnu IKKE er afsendt (tracking ikke klar)
 const NOT_READY_STATUSES = ['under plukning', 'afventer', 'annulleret', 'pakket', 'kommende'];
+
+async function searchReferenceAndWait(page: Page, aoReference: string): Promise<void> {
+  const startedAt = Date.now();
+  const searchInput = page.locator('input#searchTextInput').first();
+  await searchInput.waitFor({ state: 'visible', timeout: config.bot.pageTimeoutMs });
+  await searchInput.fill(`#${aoReference}`);
+  const clickedSearchButton = await page.evaluate(() => {
+    const input = document.querySelector('input#searchTextInput') as HTMLInputElement | null;
+    if (!input) return false;
+
+    const inputRect = input.getBoundingClientRect();
+    const buttons = Array.from(document.querySelectorAll('button')) as HTMLButtonElement[];
+    const candidates = buttons
+      .map((button) => ({ button, rect: button.getBoundingClientRect(), text: (button.textContent ?? '').trim() }))
+      .filter(({ button, rect, text }) =>
+        text.toLowerCase() === 'søg' &&
+        !button.disabled &&
+        rect.width > 0 &&
+        rect.height > 0 &&
+        Math.abs(rect.top - inputRect.top) < 80 &&
+        rect.left > inputRect.left
+      )
+      .sort((a, b) => Math.abs(a.rect.left - inputRect.right) - Math.abs(b.rect.left - inputRect.right));
+
+    if (candidates[0]) {
+      candidates[0].button.click();
+      return true;
+    }
+
+    input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    input?.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+    return false;
+  });
+  logger.info(`[AO] Sogeknap ved leveringsfelt klikket for #${aoReference}: ${clickedSearchButton ? 'ja' : 'nej, brugte Enter fallback'}.`);
+
+  const waitResult = await page.waitForFunction((aoRef) => {
+    const normalize = (v: string): string => v.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const target = normalize(aoRef);
+
+    const rows = Array.from(document.querySelectorAll('tbody tr'));
+    for (const row of rows) {
+      const tds = Array.from(row.querySelectorAll('td'));
+      if (tds.length < 5) continue;
+      const rowText = normalize(tds.map((td) => td.textContent ?? '').join(' '));
+      if (rowText.includes(target)) return 'found';
+    }
+
+    const bodyText = (document.body?.innerText ?? '').toLowerCase();
+    if (
+      bodyText.includes('ingen resultater') ||
+      bodyText.includes('ingen leveringer') ||
+      bodyText.includes('ingen data') ||
+      bodyText.includes('no results')
+    ) {
+      return 'empty';
+    }
+
+    return false;
+  }, aoReference, { timeout: 30_000 })
+    .then((handle) => handle.jsonValue())
+    .catch(() => 'timeout');
+
+  logger.info(
+    `[AO] Soegning efter #${aoReference} ventede ${((Date.now() - startedAt) / 1000).toFixed(1)}s; resultat=${waitResult}.`
+  );
+
+  if (waitResult === 'timeout') {
+    const safeReference = aoReference.replace(/[^a-zA-Z0-9_-]/g, '_');
+    await page.screenshot({ path: `logs/ao-search-timeout-${safeReference}.png`, fullPage: true }).catch(() => {});
+    const diagnostics = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input')).map((input) => ({
+        id: input.id,
+        name: input.getAttribute('name'),
+        type: input.getAttribute('type'),
+        placeholder: input.getAttribute('placeholder'),
+        value: input.value,
+        visible: !!(input.offsetWidth || input.offsetHeight || input.getClientRects().length),
+      }));
+      const rows = Array.from(document.querySelectorAll('tbody tr')).slice(0, 5).map((row) =>
+        (row.textContent ?? '').replace(/\s+/g, ' ').trim()
+      );
+      return {
+        url: window.location.href,
+        title: document.title,
+        inputs,
+        rowCount: document.querySelectorAll('tbody tr').length,
+        rows,
+        bodySnippet: (document.body?.innerText ?? '').replace(/\s+/g, ' ').trim().slice(0, 800),
+      };
+    }).catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
+    logger.warn(`[AO] Timeout-diagnose for #${aoReference}: ${JSON.stringify(diagnostics)}`);
+  }
+}
+
+async function navigateToDeliveryOverview(page: Page): Promise<void> {
+  const baseUrl = new URL(config.ao.loginUrl).origin;
+
+  try {
+    logger.info('[AO] Navigerer via Mit overblik -> Leveringsoversigt.');
+    if (!/ao\.dk/i.test(page.url())) {
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    }
+
+    const overviewLink = page.locator('a[href="/mit-overblik"], a[href*="/mit-overblik"].mit-overblik, .header-menu.mit-overblik').first();
+    await overviewLink.waitFor({ state: 'visible', timeout: config.bot.pageTimeoutMs });
+    await overviewLink.click();
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+
+    const deliveryOverviewLink = page.locator('a[href="/mit-overblik/leveringsoversigt"]').first();
+    await deliveryOverviewLink.waitFor({ state: 'visible', timeout: config.bot.pageTimeoutMs });
+    await deliveryOverviewLink.click();
+    logger.info('[AO] Leveringsoversigt-link klikket.');
+
+    await page.waitForSelector('input#searchTextInput', {
+      state: 'visible',
+      timeout: config.bot.pageTimeoutMs,
+    });
+    logger.info('[AO] Leveringsoversigt er klar.');
+  } catch (err) {
+    await page.screenshot({ path: 'logs/ao-navigation-error.png', fullPage: true }).catch(() => {});
+    const diagnostics = await page.evaluate(() => ({
+      url: window.location.href,
+      title: document.title,
+      bodySnippet: (document.body?.innerText ?? '').replace(/\s+/g, ' ').trim().slice(0, 1200),
+    })).catch((diagErr) => ({ error: diagErr instanceof Error ? diagErr.message : String(diagErr) }));
+    logger.warn(`[AO] Navigation til leveringsoversigt fejlede: ${JSON.stringify(diagnostics)}`);
+    throw err;
+  }
+}
 
 async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeResult> {
   const scanOrderRows = async () => {
@@ -187,12 +339,8 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
     }, aoReference);
   };
 
-  const baseUrl = new URL(config.ao.loginUrl).origin;
-  const url = `${baseUrl}/mit-overblik/leveringsoversigt`;
-
-  // ── Trin 1: Naviger direkte til leveringsoversigt ─────────────────────
-  logger.debug('Navigerer til leveringsoversigt…');
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  // Trin 1: Naviger via AO-menuen til leveringsoversigt.
+  await navigateToDeliveryOverview(page);
 
   // Vent kort på at søgefeltet bliver synligt før vi vurderer login-status.
   const hasSearchInput = await page
@@ -209,26 +357,13 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
   if (!hasSearchInput || hasLoginForm || onLoginPage) {
     logger.warn('Session mangler/udløbet – logger ind igen…');
     isLoggedIn = false;
-    await login();
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('input#searchTextInput', { timeout: config.bot.pageTimeoutMs });
+    await login(page);
+    await navigateToDeliveryOverview(page);
   }
 
   // ── Trin 2: Søg på reference ──────────────────────────────────────────
   logger.debug(`Søger efter reference: #${aoReference}`);
-  await page.waitForSelector('input#searchTextInput', { timeout: config.bot.pageTimeoutMs });
-  await page.fill('input#searchTextInput', `#${aoReference}`);
-  await page.click('button[type="submit"]');
-
-  // Vent på at Vue SPA er færdig med at opdatere DOM'en.
-  // networkidle er upålidelig på SPAs med baggrundspoll – vi venter i stedet
-  // på at submit-knappens loading-spinner forsvinder (display: none).
-  await page.waitForFunction(() => {
-    const btn = document.querySelector('button[type="submit"]');
-    if (!btn) return false;
-    const spinner = btn.querySelector('div[style]') as HTMLElement | null;
-    return spinner ? spinner.style.display === 'none' : true;
-  }, { timeout: 15_000 }).catch(() => {});
+  await searchReferenceAndWait(page, aoReference);
 
   // ── Trin 3: Scan alle tbody-rækker direkte i browseren ───────────────
   // Bruger page.evaluate() for at undgå Playwright-timeout og "stale element"
@@ -239,15 +374,7 @@ async function lookupTracking(page: Page, aoReference: string): Promise<ScrapeRe
   if (!scanResult.found) {
     logger.warn(`Reference #${aoReference} ikke fundet i første scan – prøver refresh + ny søgning…`);
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('input#searchTextInput', { timeout: config.bot.pageTimeoutMs });
-    await page.fill('input#searchTextInput', `#${aoReference}`);
-    await page.click('button[type="submit"]');
-    await page.waitForFunction(() => {
-      const btn = document.querySelector('button[type="submit"]');
-      if (!btn) return false;
-      const spinner = btn.querySelector('div[style]') as HTMLElement | null;
-      return spinner ? spinner.style.display === 'none' : true;
-    }, { timeout: 15_000 }).catch(() => {});
+    await searchReferenceAndWait(page, aoReference);
     scanResult = await scanOrderRows();
   }
 

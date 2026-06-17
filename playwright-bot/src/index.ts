@@ -121,6 +121,12 @@ async function run(sendEmail = false): Promise<void> {
     ahlsell: [],
     bd: [],
   };
+  const providerBrowserErrorStreak: Record<ProviderName, number> = {
+    ao: 0,
+    ahlsell: 0,
+    bd: 0,
+  };
+  const maxBrowserErrorsBeforeRestart = 3;
   const useWordPressFulfillment = shouldRunWordPressFulfillmentAfterIndex();
   const useWordPressFulfillmentBackup = shouldRunWordPressFulfillmentBackup();
   const summary: RunSummary = {
@@ -240,18 +246,30 @@ async function run(sendEmail = false): Promise<void> {
         logger.info(`Opslag via ${provider.name} for ordre #${order.order_id}`);
         let result = await provider.getTrackingForOrder(aoRef);
 
-        // Browser crashede for denne provider – forsøg genstart én gang
+        // Genstart kun provider-browseren efter flere browser-fejl i traek.
         if (!result.success && result.reason === 'error' && isBrowserRelatedError(result.message)) {
-          logger.warn(`Browser lukket uventet hos ${provider.name} – forsøger genstart…`);
-          try {
-            await provider.closeBrowser().catch(() => {});
-            await provider.launchAndLogin();
-            result = await provider.getTrackingForOrder(aoRef);
-          } catch (restartErr) {
-            logger.error(`Kunne ikke genstarte ${provider.name}:`, restartErr);
-            lastErrorMessage = String(restartErr);
-            continue;
+          providerBrowserErrorStreak[provider.name]++;
+          logger.warn(
+            'Browser-relateret fejl hos ' + provider.name + ' ' +
+            '(' + providerBrowserErrorStreak[provider.name] + '/' + maxBrowserErrorsBeforeRestart + '): ' +
+            (result.message ?? 'ukendt fejl')
+          );
+
+          if (providerBrowserErrorStreak[provider.name] >= maxBrowserErrorsBeforeRestart) {
+            logger.warn(provider.name + ' har haft ' + maxBrowserErrorsBeforeRestart + ' browser-fejl i traek - genstarter browser/session nu.');
+            try {
+              await provider.closeBrowser().catch(() => {});
+              await provider.launchAndLogin();
+              providerBrowserErrorStreak[provider.name] = 0;
+              result = await provider.getTrackingForOrder(aoRef);
+            } catch (restartErr) {
+              logger.error('Kunne ikke genstarte ' + provider.name + ':', restartErr);
+              lastErrorMessage = String(restartErr);
+              continue;
+            }
           }
+        } else if (result.success || result.reason !== 'error') {
+          providerBrowserErrorStreak[provider.name] = 0;
         }
 
         if (result.success) {
