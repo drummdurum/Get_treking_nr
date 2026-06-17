@@ -30,6 +30,7 @@ export const config = {
     loginUrl: process.env.AO_LOGIN_URL ?? 'https://www.ao.dk/login',
     username: process.env.AO_USERNAME ?? '',
     password: process.env.AO_PASSWORD ?? '',
+    userDataDir: path.resolve(process.env.AO_USER_DATA_DIR ?? './.browser-profiles/ao'),
   },
   ahlsell: {
     baseUrl:  process.env.AHLSELL_BASE_URL ?? 'https://www.ahlsell.dk/da',

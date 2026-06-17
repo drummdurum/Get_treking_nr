@@ -12,7 +12,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { Browser, BrowserContext, Page, chromium } from 'playwright';
+import { BrowserContext, Page, chromium } from 'playwright';
 import { config } from '../config';
 import { logger } from '../logger';
 import { dedupeTrackingItems, detectCarrierFromTrackingNumber, normalizeCarrier } from '../tracking-utils';
@@ -22,7 +22,6 @@ import type { ScrapeResult, TrackingItem } from '../types';
 // Module-level browser singleton (reused across orders in one bot run)
 // ─────────────────────────────────────────────────────────────────────────────
 
-let browser: Browser | null = null;
 let context: BrowserContext | null = null;
 let aoPage: Page | null = null;
 let isLoggedIn = false;
@@ -38,12 +37,9 @@ let isLoggedIn = false;
 export async function launchAndLogin(): Promise<void> {
   logger.info('Starter browser…');
 
-  browser = await chromium.launch({
+  context = await chromium.launchPersistentContext(config.ao.userDataDir, {
     headless: config.bot.headless,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  });
-
-  context = await browser.newContext({
     userAgent:
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
       'AppleWebKit/537.36 (KHTML, like Gecko) ' +
@@ -61,7 +57,7 @@ export async function launchAndLogin(): Promise<void> {
  * Look up one AO order reference and extract the tracking number.
  */
 export async function getTrackingForOrder(aoReference: string): Promise<ScrapeResult> {
-  if (!context || !browser?.isConnected()) {
+  if (!context) {
     return { success: false, reason: 'error', message: 'Browser ikke tilgaengelig eller lukket uventet.' };
   }
 
@@ -104,9 +100,8 @@ function setupAoPage(page: Page): void {
  * Close the browser. Call once at the end of a bot run.
  */
 export async function closeBrowser(): Promise<void> {
-  if (browser) {
-    await browser.close();
-    browser = null;
+  if (context) {
+    await context.close();
     context = null;
     aoPage = null;
     isLoggedIn = false;
@@ -146,13 +141,11 @@ async function login(existingPage?: Page): Promise<void> {
     // Det ene er i en skjult navbar-dropdown, det andet er i den synlige login-boks
     await page.waitForSelector('#username:visible', { timeout: config.bot.pageTimeoutMs });
 
-    // ── Udfyld login-formular ─────────────────────────────────────────────
+    // Udfyld login-formular - samme simple metode som den tidligere fungerende version.
     await page.locator('#username:visible').fill(config.ao.username);
     await page.locator('#password:visible').fill(config.ao.password);
     await page.locator('button[type="submit"]:visible:has-text("Log ind")').click();
 
-    // "Mit overblik" kan findes i DOMen foer sessionen er aktiv. Vent paa
-    // kontoteksten, saa vi ikke gaar videre mens AO stadig svarer 401.
     await page.waitForFunction((username) => {
       const accountText = (document.querySelector('a[href="/mit-overblik"] .account-name')?.textContent ?? '').trim().toLowerCase();
       return accountText.length > 0 && accountText.includes(String(username).toLowerCase());
