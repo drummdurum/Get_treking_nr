@@ -9,6 +9,7 @@ let context: BrowserContext | null = null;
 
 const BD_SEARCH_ROW_TIMEOUT_MS = 12_000;
 const BD_OPEN_ORDER_TIMEOUT_MS = 12_000;
+const BD_DESKTOP_VIEWPORT = { width: 1440, height: 1100 };
 
 export async function launchAndLogin(): Promise<void> {
   logger.info('[BD] Starter browser...');
@@ -25,6 +26,8 @@ export async function launchAndLogin(): Promise<void> {
       'Chrome/124.0.0.0 Safari/537.36',
     locale: 'da-DK',
     timezoneId: 'Europe/Copenhagen',
+    viewport: BD_DESKTOP_VIEWPORT,
+    screen: BD_DESKTOP_VIEWPORT,
   });
 
   await login();
@@ -37,6 +40,7 @@ export async function getTrackingForOrder(reference: string): Promise<ScrapeResu
 
   const page = await context.newPage();
   page.setDefaultTimeout(config.bot.pageTimeoutMs);
+  await page.setViewportSize(BD_DESKTOP_VIEWPORT).catch(() => undefined);
 
   try {
     await gotoOrdersPage(page);
@@ -347,18 +351,30 @@ async function waitForReferenceRow(page: Page, reference: string, timeout: numbe
 }
 
 async function clickReferenceFilter(page: Page): Promise<void> {
-  const currentReference = page
-    .locator('button:has-text("Reference"), [role="button"]:has-text("Reference"), input[placeholder*="Reference" i]')
-    .first();
-  if (await currentReference.isVisible().catch(() => false)) {
+  if (await isReferenceFilterSelected(page)) {
     return;
+  }
+
+  const visibleReferenceButton = page
+    .locator(
+      'button[aria-label="Reference"], button[data-testid="radioPillTestId"]:has-text("Reference"), ' +
+      'button[data-value="reference"][role="radio"], button[data-testid="radio-button"][data-value="reference"]'
+    )
+    .filter({ hasText: /Reference/i })
+    .first();
+  if (await visibleReferenceButton.isVisible().catch(() => false)) {
+    await visibleReferenceButton.click({ timeout: 5_000 }).catch(async () => {
+      await visibleReferenceButton.click({ force: true, timeout: 5_000 });
+    });
+    if (await waitForReferenceFilterSelected(page, 5_000)) return;
   }
 
   const filterButton = page
     .locator('button:has-text("Ordrenummer"), [role="button"]:has-text("Ordrenummer")')
     .first();
   if (!(await filterButton.isVisible().catch(() => false))) {
-    throw new Error('Kunne ikke finde Ordrenummer-filteret paa BD ordresiden.');
+    logger.warn('[BD] Kunne ikke finde Ordrenummer-filteret. Fortsaetter med synligt soegefelt.');
+    return;
   }
 
   await filterButton.click({ timeout: 5_000 }).catch(async () => {
@@ -366,22 +382,96 @@ async function clickReferenceFilter(page: Page): Promise<void> {
   });
 
   const referenceOption = page
-    .locator('button[data-value="reference"][role="radio"], button[data-testid="radio-button"][data-value="reference"]')
+    .locator(
+      'button[aria-label="Reference"], button[data-testid="radioPillTestId"]:has-text("Reference"), ' +
+      'button[data-value="reference"][role="radio"], button[data-testid="radio-button"][data-value="reference"]'
+    )
+    .filter({ hasText: /Reference/i })
     .first();
-  await referenceOption.waitFor({ state: 'visible', timeout: 8_000 });
-  await referenceOption.click({ timeout: 5_000 }).catch(async () => {
-    await referenceOption.click({ force: true, timeout: 5_000 });
-  });
+  const referenceClicked = await referenceOption
+    .waitFor({ state: 'visible', timeout: 8_000 })
+    .then(async () => {
+      await referenceOption.click({ timeout: 5_000 }).catch(async () => {
+        await referenceOption.click({ force: true, timeout: 5_000 });
+      });
+      return true;
+    })
+    .catch(async () => {
+      return await clickReferenceFilterWithDomFallback(page);
+    });
 
-  await page.waitForFunction(() => {
-    const checkedReference = document.querySelector('button[data-value="reference"][aria-checked="true"]');
+  if (!referenceClicked) {
+    logger.warn('[BD] Reference-filteret var skjult/disabled. Fortsaetter med synligt soegefelt.');
+    return;
+  }
+
+  await waitForReferenceFilterSelected(page, 8_000);
+}
+
+async function isReferenceFilterSelected(page: Page): Promise<boolean> {
+  return await page.evaluate(() => {
+    const checkedReference = document.querySelector(
+      'button[data-value="reference"][aria-checked="true"], button[aria-label="Reference"][aria-checked="true"]'
+    );
     if (checkedReference) return true;
 
-    const text = Array.from(document.querySelectorAll('button, [role="button"], input'))
-      .map((el) => `${el.textContent ?? ''} ${(el as HTMLInputElement).placeholder ?? ''}`)
-      .join('\n');
-    return /Reference/i.test(text);
-  }, { timeout: 8_000 }).catch(() => {});
+    const visibleInput = Array.from(document.querySelectorAll('input')).find((input) => {
+      const style = window.getComputedStyle(input);
+      const rect = input.getBoundingClientRect();
+      return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+    }) as HTMLInputElement | undefined;
+
+    return /Reference/i.test(visibleInput?.placeholder ?? '');
+  }).catch(() => false);
+}
+
+async function waitForReferenceFilterSelected(page: Page, timeout: number): Promise<boolean> {
+  return await page
+    .waitForFunction(() => {
+      const checkedReference = document.querySelector(
+        'button[data-value="reference"][aria-checked="true"], button[aria-label="Reference"][aria-checked="true"]'
+      );
+      if (checkedReference) return true;
+
+      const visibleInput = Array.from(document.querySelectorAll('input')).find((input) => {
+        const style = window.getComputedStyle(input);
+        const rect = input.getBoundingClientRect();
+        return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+      }) as HTMLInputElement | undefined;
+
+      return /Reference/i.test(visibleInput?.placeholder ?? '');
+    }, { timeout })
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function clickReferenceFilterWithDomFallback(page: Page): Promise<boolean> {
+  return await page.evaluate(() => {
+    const isUsable = (el: Element): el is HTMLElement => {
+      const htmlEl = el as HTMLElement;
+      const button = el as HTMLButtonElement;
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return !button.disabled &&
+        style.visibility !== 'hidden' &&
+        style.display !== 'none' &&
+        rect.width > 0 &&
+        rect.height > 0 &&
+        htmlEl.getAttribute('aria-disabled') !== 'true';
+    };
+
+    const candidates = Array.from(
+      document.querySelectorAll('button[data-value="reference"], button[data-testid="radio-button"]')
+    );
+    const referenceButton = candidates.find((el) => {
+      const text = (el.textContent ?? '').trim();
+      return isUsable(el) && (el.getAttribute('data-value') === 'reference' || /Reference/i.test(text));
+    });
+
+    if (!referenceButton) return false;
+    (referenceButton as HTMLElement).click();
+    return true;
+  }).catch(() => false);
 }
 
 async function findSearchInput(page: Page) {

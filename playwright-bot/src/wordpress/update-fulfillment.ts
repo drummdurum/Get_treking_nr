@@ -203,7 +203,7 @@ function isBrowserRelatedError(message?: string): boolean {
 }
 
 function getProviderSequence(): ProviderName[] {
-  const raw = (process.env.SCRAPER_PROVIDERS ?? 'ao,ahlsell,bd').toLowerCase();
+  const raw = (process.env.SCRAPER_PROVIDERS ?? 'ahlsell,bd').toLowerCase();
   const requested = raw
     .split(',')
     .map((x) => x.trim())
