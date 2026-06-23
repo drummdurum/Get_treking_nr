@@ -81,6 +81,19 @@ function isBrowserRelatedError(message?: string): boolean {
   return m.includes('browser') || m.includes('lukket');
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeoutId: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timeout efter ${timeoutMs}ms`)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 function getProviderSequence(): ProviderName[] {
   const raw = (process.env.SCRAPER_PROVIDERS ?? 'ao,ahlsell,bd').toLowerCase();
   const requested = raw
@@ -127,6 +140,7 @@ async function run(sendEmail = false): Promise<void> {
     bd: 0,
   };
   const maxBrowserErrorsBeforeRestart = 3;
+  const providerLookupTimeoutMs = Math.max(config.bot.pageTimeoutMs * 4, 120_000);
   const useWordPressFulfillment = shouldRunWordPressFulfillmentAfterIndex();
   const useWordPressFulfillmentBackup = shouldRunWordPressFulfillmentBackup();
   const summary: RunSummary = {
@@ -244,7 +258,11 @@ async function run(sendEmail = false): Promise<void> {
 
       for (const provider of activeProviders) {
         logger.info(`Opslag via ${provider.name} for ordre #${order.order_id}`);
-        let result = await provider.getTrackingForOrder(aoRef);
+        let result = await withTimeout(
+          provider.getTrackingForOrder(aoRef),
+          providerLookupTimeoutMs,
+          `${provider.name} opslag for ordre #${order.order_id}`,
+        );
 
         // Genstart kun provider-browseren efter flere browser-fejl i traek.
         if (!result.success && result.reason === 'error' && isBrowserRelatedError(result.message)) {
@@ -261,7 +279,11 @@ async function run(sendEmail = false): Promise<void> {
               await provider.closeBrowser().catch(() => {});
               await provider.launchAndLogin();
               providerBrowserErrorStreak[provider.name] = 0;
-              result = await provider.getTrackingForOrder(aoRef);
+              result = await withTimeout(
+                provider.getTrackingForOrder(aoRef),
+                providerLookupTimeoutMs,
+                `${provider.name} opslag for ordre #${order.order_id} efter genstart`,
+              );
             } catch (restartErr) {
               logger.error('Kunne ikke genstarte ' + provider.name + ':', restartErr);
               lastErrorMessage = String(restartErr);
