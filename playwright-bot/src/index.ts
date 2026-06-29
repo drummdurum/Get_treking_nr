@@ -39,6 +39,7 @@ import { sendMorningReport } from './mailer';
 import { runWordPressFulfillment, type ManualTrackingRow } from './wordpress/update-fulfillment';
 import { dedupeTrackingItems, hasTrackingNumberLetterPrefix } from './tracking-utils';
 import type { RunSummary, ScrapeResult, UpdatedOrder } from './types';
+import axios from 'axios';
 
 type ProviderName = 'ao' | 'ahlsell' | 'bd';
 
@@ -119,6 +120,22 @@ function shouldRunWordPressFulfillmentAfterIndex(): boolean {
 
 function shouldRunWordPressFulfillmentBackup(): boolean {
   return process.env.RUN_WP_FULFILLMENT_BACKUP === 'true';
+}
+
+async function logOutboundIp(): Promise<void> {
+  try {
+    const response = await axios.get<string>('https://ifconfig.me', {
+      headers: {
+        Accept: 'text/plain',
+        'User-Agent': 'kloakgods-tracking-bot/1.0',
+      },
+      timeout: 10_000,
+    });
+
+    logger.info(`Railway outbound IP: ${String(response.data).trim()}`);
+  } catch (err) {
+    logger.warn(`Kunne ikke hente Railway outbound IP fra ifconfig.me: ${String(err)}`);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -508,6 +525,8 @@ if (runOnce) {
       process.exit(1);
     });
 } else {
+  logOutboundIp().catch((err) => logger.warn(`Kunne ikke logge Railway outbound IP: ${String(err)}`));
+
   // ── Kør med det samme ved opstart (hvis konfigureret) ──────────────────
   if (config.bot.runOnStartup) {
     logger.info('Kører bot én gang med det samme ved opstart…');
